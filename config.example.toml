@@ -1,0 +1,25 @@
+[app]
+mode = "ManualQa"
+auto_start = true
+http_bind = "127.0.0.1:8765"
+simulate_transcriber = true
+
+[capture]
+source = "parec"
+frame_ms = 20
+sample_rate_hz = 16000
+channels = 1
+silence_threshold = 0.008
+chunk_ms = 200
+
+[storage]
+database_path = "./soundmind.db"
+retention_days = 14
+
+[providers.openai]
+enabled = false
+model = "gpt-5"
+
+[providers.elevenlabs]
+enabled = false
+model = "scribe_v1"

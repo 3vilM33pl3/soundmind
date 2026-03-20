@@ -1,0 +1,10 @@
+[package]
+name = "transcript_core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+chrono.workspace = true
+stt_scribe = { path = "../stt_scribe" }
+uuid.workspace = true
