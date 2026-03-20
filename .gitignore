@@ -1,0 +1,5 @@
+/.mem
+/target
+*.db
+.env
+config.toml
