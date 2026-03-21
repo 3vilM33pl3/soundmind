@@ -10,14 +10,14 @@ This repository currently includes:
 - a Rust workspace with focused crates for capture, pipeline, transcript,
   policy, OpenAI integration, storage, backend orchestration, and a terminal UI
 - a `parec`/`pactl` capture backend for Ubuntu PulseAudio or PipeWire
-- a mock STT adapter that keeps the end-to-end flow runnable without live
-  ElevenLabs credentials
+- a real ElevenLabs Scribe realtime transcriber with automatic fallback to the
+  mock adapter when live startup fails
 - a backend HTTP control plane and a terminal dashboard client
 
 ## Quick start
 
 1. Copy `config.example.toml` to `config.toml`.
-2. Optionally copy `.env.example` to `.env` and set provider keys.
+2. Put provider keys in `keys.env` or export them in your shell environment.
 3. Run the backend:
 
 ```bash
@@ -42,5 +42,5 @@ The repository implements the first vertical slice of the architecture:
 - OpenAI Responses API adapter with a local fallback
 - terminal UI for live status and manual actions
 
-The desktop shell, live ElevenLabs Scribe integration, tray support, hotkeys,
-and packaging are still separate follow-up milestones.
+The desktop shell, tray support, hotkeys, and packaging are still separate
+follow-up milestones.
