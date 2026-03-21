@@ -32,8 +32,7 @@ impl TranscriptState {
             }
             TranscriberEvent::FinalTranscript(final_transcript) => {
                 self.partial = None;
-                let segment = self.commit_final(session_id, final_transcript);
-                Some(segment)
+                self.commit_final(session_id, final_transcript)
             }
             TranscriberEvent::Error(_) | TranscriberEvent::Health(_) => None,
         }
@@ -66,10 +65,10 @@ impl TranscriptState {
         &mut self,
         session_id: Uuid,
         final_transcript: FinalTranscript,
-    ) -> TranscriptSegment {
+    ) -> Option<TranscriptSegment> {
         if let Some(last) = self.committed.last() {
             if last.text == final_transcript.text {
-                return last.clone();
+                return None;
             }
         }
 
@@ -84,7 +83,7 @@ impl TranscriptState {
         };
 
         self.committed.push(segment.clone());
-        segment
+        Some(segment)
     }
 }
 
@@ -115,5 +114,34 @@ mod tests {
         );
 
         assert!(state.last_question_candidate().is_some());
+    }
+
+    #[test]
+    fn ignores_duplicate_final_segments() {
+        let session_id = Uuid::new_v4();
+        let mut state = TranscriptState::default();
+
+        let first = state.apply_event(
+            session_id,
+            TranscriberEvent::FinalTranscript(FinalTranscript {
+                start_ms: 0,
+                end_ms: 500,
+                text: "Repeated line".to_string(),
+                source: "mock".to_string(),
+            }),
+        );
+        let duplicate = state.apply_event(
+            session_id,
+            TranscriberEvent::FinalTranscript(FinalTranscript {
+                start_ms: 500,
+                end_ms: 1000,
+                text: "Repeated line".to_string(),
+                source: "mock".to_string(),
+            }),
+        );
+
+        assert!(first.is_some());
+        assert!(duplicate.is_none());
+        assert_eq!(state.segments().len(), 1);
     }
 }
