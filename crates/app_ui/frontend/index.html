@@ -12,28 +12,6 @@
   </head>
   <body>
     <div class="shell">
-      <header class="topbar">
-        <div class="topbar-title">
-          <p class="eyebrow">Ubuntu System Audio Assistant</p>
-          <h1>Soundmind</h1>
-        </div>
-        <div class="topbar-panel">
-          <div class="status-grid">
-            <div class="status-chip" id="backend-chip">Backend: connecting</div>
-            <div class="status-chip" id="capture-chip">Capture: idle</div>
-            <div class="status-chip" id="cloud-chip">Cloud: off</div>
-            <div class="status-chip" id="stt-chip">STT: unknown</div>
-          </div>
-          <div class="hero-note" id="backend-note">Waiting for backend status.</div>
-          <div class="hero-actions">
-            <button data-action="Start">Start Capture</button>
-            <button data-action="Stop" class="secondary">Stop Capture</button>
-            <button data-action="PauseCloud" class="ghost">Pause Cloud</button>
-            <button data-action="ResumeCloud" class="ghost">Resume Cloud</button>
-          </div>
-        </div>
-      </header>
-
       <main class="dashboard">
         <section class="primary-stage">
           <section class="panel panel-transcript">
@@ -70,6 +48,28 @@
             </div>
           </section>
         </section>
+
+        <header class="topbar">
+          <div class="topbar-title">
+            <p class="eyebrow">Ubuntu System Audio Assistant</p>
+            <h1>Soundmind</h1>
+          </div>
+          <div class="topbar-panel">
+            <div class="status-grid">
+              <div class="status-chip" id="backend-chip">Backend: connecting</div>
+              <div class="status-chip" id="capture-chip">Capture: idle</div>
+              <div class="status-chip" id="cloud-chip">Cloud: off</div>
+              <div class="status-chip" id="stt-chip">STT: unknown</div>
+            </div>
+            <div class="hero-note" id="backend-note">Waiting for backend status.</div>
+            <div class="hero-actions">
+              <button data-action="Start">Start Capture</button>
+              <button data-action="Stop" class="secondary">Stop Capture</button>
+              <button data-action="PauseCloud" class="ghost">Pause Cloud</button>
+              <button data-action="ResumeCloud" class="ghost">Resume Cloud</button>
+            </div>
+          </div>
+        </header>
 
         <section class="secondary-stage">
           <section class="panel panel-settings">
