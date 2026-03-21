@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -7,15 +7,18 @@ use audio_capture::{
     AudioSource, CaptureConfig, CaptureEvent, MockAudioSource, ParecMonitorAudioSource,
 };
 use audio_pipeline::{AudioPipeline, AudioPipelineConfig};
-use axum::extract::State;
+use axum::extract::{Path as AxumPath, Query, State};
+use axum::http::{HeaderValue, StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::Utc;
 use context_engine::{last_question_candidate, recent_transcript_window};
 use dotenvy::from_filename_override;
 use ipc_schema::{
-    AppMode, AssistantKind, AssistantOutput, BackendStatusSnapshot, CaptureState, CloudState,
-    TranscriptSegmentDto, TranscriptSnapshot, UserAction,
+    AppMode, AppSettingsDto, AssistantKind, AssistantOutput, BackendStatusSnapshot, CaptureState,
+    CloudState, SessionDetailDto, SessionSummaryDto, TranscriptSegmentDto, TranscriptSnapshot,
+    UserAction,
 };
 use llm_openai::{OpenAiConfig, OpenAiReasoner, ResponseMode, assistant_timestamp};
 use policy_engine::PolicyState;
@@ -76,6 +79,13 @@ struct ProviderConfig {
 struct AppState {
     snapshot: Arc<RwLock<BackendStatusSnapshot>>,
     action_tx: mpsc::Sender<UserAction>,
+    storage: Arc<Storage>,
+    settings: Arc<RwLock<AppSettingsDto>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SessionExportQuery {
+    format: Option<String>,
 }
 
 #[tokio::main]
@@ -85,13 +95,15 @@ async fn main() -> Result<()> {
             std::env::var("RUST_LOG").unwrap_or_else(|_| "info,app_backend=debug".to_string()),
         )
         .init();
-    let _ = from_filename_override("keys.env");
+    load_keys_env();
 
     let config = load_config()?;
     let database_url = sqlite_url(&config.storage.database_path);
     let storage = Arc::new(Storage::connect(&database_url).await?);
+    let settings = Arc::new(RwLock::new(load_or_initialize_settings(&storage, &config).await?));
+    let initial_settings = settings.read().await.clone();
     let snapshot = Arc::new(RwLock::new(BackendStatusSnapshot {
-        mode: config.app.mode,
+        mode: initial_settings.default_mode,
         capture_state: if config.app.auto_start {
             CaptureState::Capturing
         } else {
@@ -103,14 +115,27 @@ async fn main() -> Result<()> {
     }));
 
     let (action_tx, action_rx) = mpsc::channel(64);
-    let app_state = AppState { snapshot: Arc::clone(&snapshot), action_tx: action_tx.clone() };
+    let app_state = AppState {
+        snapshot: Arc::clone(&snapshot),
+        action_tx: action_tx.clone(),
+        storage: Arc::clone(&storage),
+        settings: Arc::clone(&settings),
+    };
 
     let config_for_runtime = config.clone();
     let runtime_snapshot = Arc::clone(&snapshot);
     let runtime_storage = Arc::clone(&storage);
+    let runtime_settings = Arc::clone(&settings);
     tokio::spawn(async move {
         if let Err(error) =
-            run_runtime(config_for_runtime, runtime_snapshot, runtime_storage, action_rx).await
+            run_runtime(
+                config_for_runtime,
+                runtime_snapshot,
+                runtime_storage,
+                runtime_settings,
+                action_rx,
+            )
+            .await
         {
             error!(?error, "runtime exited with an error");
         }
@@ -119,6 +144,11 @@ async fn main() -> Result<()> {
     let app = Router::new()
         .route("/health", get(health))
         .route("/actions", post(post_action))
+        .route("/settings", get(get_settings).put(put_settings))
+        .route("/sessions", get(get_sessions))
+        .route("/sessions/purge", post(post_purge_sessions))
+        .route("/sessions/{session_id}", get(get_session_detail).delete(delete_session))
+        .route("/sessions/{session_id}/export", get(get_session_export))
         .layer(CorsLayer::permissive())
         .with_state(app_state);
 
@@ -135,9 +165,11 @@ async fn run_runtime(
     config: RootConfig,
     snapshot: Arc<RwLock<BackendStatusSnapshot>>,
     storage: Arc<Storage>,
+    settings: Arc<RwLock<AppSettingsDto>>,
     mut action_rx: mpsc::Receiver<UserAction>,
 ) -> Result<()> {
     let session_id = Uuid::new_v4();
+    let runtime_settings = settings.read().await.clone();
     let openai = OpenAiReasoner::new(OpenAiConfig {
         api_key: std::env::var("OPENAI_API_KEY").ok(),
         model: std::env::var("OPENAI_MODEL").unwrap_or(config.providers.openai.model.clone()),
@@ -145,8 +177,8 @@ async fn run_runtime(
     });
 
     let mut policy = PolicyState {
-        mode: config.app.mode,
-        cloud_paused: !config.app.auto_start,
+        mode: runtime_settings.default_mode,
+        cloud_paused: !runtime_settings.auto_start_cloud,
         ..PolicyState::default()
     };
     let mut transcript = TranscriptState::default();
@@ -173,7 +205,13 @@ async fn run_runtime(
         Arc::clone(&snapshot),
     );
 
-    storage.start_session(session_id, "pending-device", &format!("{:?}", config.app.mode)).await?;
+    storage
+        .start_session(
+            session_id,
+            "pending-device",
+            &format!("{:?}", runtime_settings.default_mode),
+        )
+        .await?;
     storage.append_audit_event(Some(session_id), "session_started").await?;
 
     {
@@ -187,8 +225,15 @@ async fn run_runtime(
             CloudState::Off
         };
     }
-    drain_transcriber_events(&snapshot, &storage, session_id, &mut transcript, transcriber.as_mut())
-        .await?;
+    drain_transcriber_events(
+        &snapshot,
+        &storage,
+        &settings,
+        session_id,
+        &mut transcript,
+        transcriber.as_mut(),
+    )
+    .await?;
 
     loop {
         tokio::select! {
@@ -201,6 +246,7 @@ async fn run_runtime(
                     session_id,
                     &snapshot,
                     &storage,
+                    &settings,
                     &openai,
                     &mut transcript,
                     &mut policy,
@@ -236,6 +282,7 @@ async fn run_runtime(
                             drain_transcriber_events(
                                 &snapshot,
                                 &storage,
+                                &settings,
                                 session_id,
                                 &mut transcript,
                                 transcriber.as_mut(),
@@ -245,6 +292,12 @@ async fn run_runtime(
                     }
                     CaptureEvent::Error(message) => {
                         push_error(&snapshot, message).await;
+                    }
+                    CaptureEvent::Recovering(message) => {
+                        push_recovering(&snapshot, message.clone()).await;
+                        storage
+                            .append_audit_event(Some(session_id), &format!("capture_recovering:{message}"))
+                            .await?;
                     }
                     CaptureEvent::Ended => {
                         break;
@@ -263,6 +316,7 @@ async fn run_runtime(
 async fn drain_transcriber_events(
     snapshot: &Arc<RwLock<BackendStatusSnapshot>>,
     storage: &Storage,
+    settings: &Arc<RwLock<AppSettingsDto>>,
     session_id: Uuid,
     transcript: &mut TranscriptState,
     transcriber: &mut dyn Transcriber,
@@ -282,7 +336,9 @@ async fn drain_transcriber_events(
         }
 
         if let Some(segment) = transcript.apply_event(session_id, event) {
-            storage.insert_transcript_segment(&segment).await?;
+            if settings.read().await.transcript_storage_enabled {
+                storage.insert_transcript_segment(&segment).await?;
+            }
             refresh_snapshot(snapshot, transcript).await;
         } else {
             refresh_snapshot(snapshot, transcript).await;
@@ -374,6 +430,7 @@ async fn handle_action(
     session_id: Uuid,
     snapshot: &Arc<RwLock<BackendStatusSnapshot>>,
     storage: &Storage,
+    settings: &Arc<RwLock<AppSettingsDto>>,
     openai: &OpenAiReasoner,
     transcript: &mut TranscriptState,
     policy: &mut PolicyState,
@@ -404,6 +461,9 @@ async fn handle_action(
         UserAction::SetMode(mode) => {
             policy.mode = mode;
             snapshot.write().await.mode = mode;
+            let mut runtime_settings = settings.write().await;
+            runtime_settings.default_mode = mode;
+            storage.save_settings(&runtime_settings).await?;
         }
         UserAction::AnswerLastQuestion => {
             let last_question = last_question_candidate(transcript)
@@ -557,6 +617,18 @@ async fn push_stt_error(snapshot: &Arc<RwLock<BackendStatusSnapshot>>, message: 
     }
 }
 
+async fn push_recovering(snapshot: &Arc<RwLock<BackendStatusSnapshot>>, message: String) {
+    let mut locked = snapshot.write().await;
+    if locked.capture_state == CaptureState::Error {
+        locked.capture_state = CaptureState::Capturing;
+    }
+    locked.recent_errors.push(message);
+    if locked.recent_errors.len() > 5 {
+        let excess = locked.recent_errors.len() - 5;
+        locked.recent_errors.drain(0..excess);
+    }
+}
+
 async fn health(State(state): State<AppState>) -> Json<BackendStatusSnapshot> {
     Json(state.snapshot.read().await.clone())
 }
@@ -574,17 +646,121 @@ async fn post_action(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
+async fn get_settings(State(state): State<AppState>) -> Json<AppSettingsDto> {
+    Json(state.settings.read().await.clone())
+}
+
+async fn put_settings(
+    State(state): State<AppState>,
+    Json(settings): Json<AppSettingsDto>,
+) -> Result<Json<AppSettingsDto>, StatusCode> {
+    state
+        .storage
+        .save_settings(&settings)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    *state.settings.write().await = settings.clone();
+    Ok(Json(settings))
+}
+
+async fn get_sessions(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<SessionSummaryDto>>, StatusCode> {
+    let sessions = state
+        .storage
+        .list_sessions(100)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(sessions))
+}
+
+async fn get_session_detail(
+    State(state): State<AppState>,
+    AxumPath(session_id): AxumPath<Uuid>,
+) -> Result<Json<SessionDetailDto>, StatusCode> {
+    let session = state
+        .storage
+        .get_session_detail(session_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    session.map(Json).ok_or(StatusCode::NOT_FOUND)
+}
+
+async fn delete_session(
+    State(state): State<AppState>,
+    AxumPath(session_id): AxumPath<Uuid>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    if state.snapshot.read().await.session_id == Some(session_id) {
+        return Err(StatusCode::CONFLICT);
+    }
+    state
+        .storage
+        .delete_session(session_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(serde_json::json!({ "deleted": session_id })))
+}
+
+async fn post_purge_sessions(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let settings = state.settings.read().await.clone();
+    let deleted = state
+        .storage
+        .purge_sessions_older_than_days(settings.retention_days)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(serde_json::json!({ "deleted": deleted })))
+}
+
+async fn get_session_export(
+    State(state): State<AppState>,
+    AxumPath(session_id): AxumPath<Uuid>,
+    Query(query): Query<SessionExportQuery>,
+) -> Result<Response, StatusCode> {
+    let Some(session) = state
+        .storage
+        .get_session_detail(session_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    else {
+        return Err(StatusCode::NOT_FOUND);
+    };
+
+    let format = query.format.as_deref().unwrap_or("json");
+    match format {
+        "markdown" | "md" => {
+            let body = render_session_markdown(&session);
+            Ok((
+                [(
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static("text/markdown; charset=utf-8"),
+                )],
+                body,
+            )
+                .into_response())
+        }
+        _ => Ok((
+            [(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            )],
+            serde_json::to_string_pretty(&session).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+        )
+            .into_response()),
+    }
+}
+
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
 }
 
 fn load_config() -> Result<RootConfig> {
-    let path =
-        if Path::new("config.toml").exists() { "config.toml" } else { "config.example.toml" };
-
-    let raw = std::fs::read_to_string(path).with_context(|| format!("failed to read {path}"))?;
+    let path = resolve_config_path()?;
+    let raw = std::fs::read_to_string(&path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
     let mut config: RootConfig =
-        toml::from_str(&raw).with_context(|| format!("failed to parse {path}"))?;
+        toml::from_str(&raw).with_context(|| format!("failed to parse {}", path.display()))?;
 
     if let Ok(api_key) = std::env::var("OPENAI_API_KEY") {
         if !api_key.trim().is_empty() {
@@ -627,6 +803,109 @@ fn load_config() -> Result<RootConfig> {
     Ok(config)
 }
 
+fn load_keys_env() {
+    for path in candidate_keys_env_paths() {
+        if path.exists() {
+            if let Err(error) = from_filename_override(&path) {
+                warn!(path = %path.display(), ?error, "failed to load keys.env");
+            } else {
+                info!(path = %path.display(), "loaded provider keys");
+            }
+            break;
+        }
+    }
+}
+
+fn resolve_config_path() -> Result<PathBuf> {
+    for path in candidate_config_paths() {
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+
+    let searched = candidate_config_paths()
+        .into_iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    anyhow::bail!("no config file found; searched {searched}")
+}
+
+fn candidate_config_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Ok(explicit) = std::env::var("SOUNDMIND_CONFIG") {
+        if !explicit.trim().is_empty() {
+            paths.push(PathBuf::from(explicit));
+        }
+    }
+    paths.push(PathBuf::from("config.toml"));
+    if let Some(config_dir) = soundmind_config_dir() {
+        paths.push(config_dir.join("config.toml"));
+    }
+    paths.push(PathBuf::from("config.example.toml"));
+    paths
+}
+
+fn candidate_keys_env_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Ok(explicit) = std::env::var("SOUNDMIND_KEYS_ENV") {
+        if !explicit.trim().is_empty() {
+            paths.push(PathBuf::from(explicit));
+        }
+    }
+    paths.push(PathBuf::from("keys.env"));
+    if let Some(config_dir) = soundmind_config_dir() {
+        paths.push(config_dir.join("keys.env"));
+    }
+    paths
+}
+
+fn soundmind_config_dir() -> Option<PathBuf> {
+    dirs::config_dir().map(|path| path.join("soundmind"))
+}
+
 fn sqlite_url(path: &str) -> String {
     if path.starts_with("sqlite:") { path.to_string() } else { format!("sqlite://{path}") }
+}
+
+async fn load_or_initialize_settings(storage: &Storage, config: &RootConfig) -> Result<AppSettingsDto> {
+    if let Some(settings) = storage.load_settings().await? {
+        return Ok(settings);
+    }
+
+    let settings = AppSettingsDto {
+        retention_days: config.storage.retention_days,
+        transcript_storage_enabled: true,
+        auto_start_cloud: config.app.auto_start,
+        default_mode: config.app.mode,
+    };
+    storage.save_settings(&settings).await?;
+    Ok(settings)
+}
+
+fn render_session_markdown(session: &SessionDetailDto) -> String {
+    let mut markdown = String::new();
+    markdown.push_str("# Soundmind Session Export\n\n");
+    markdown.push_str(&format!("Session ID: `{}`\n", session.session.id));
+    markdown.push_str(&format!("Started: {}\n", session.session.started_at.to_rfc3339()));
+    if let Some(ended_at) = session.session.ended_at {
+        markdown.push_str(&format!("Ended: {}\n", ended_at.to_rfc3339()));
+    }
+    markdown.push_str(&format!("Capture Device: {}\n", session.session.capture_device));
+    markdown.push_str(&format!("Mode: {}\n\n", session.session.mode));
+    markdown.push_str("## Transcript\n\n");
+    for segment in &session.transcript_segments {
+        markdown.push_str(&format!(
+            "- [{}-{} ms] {}\n",
+            segment.start_ms, segment.end_ms, segment.text
+        ));
+    }
+    markdown.push_str("\n## Assistant Events\n\n");
+    for event in &session.assistant_events {
+        markdown.push_str(&format!(
+            "- {} ({:.2}): {}\n",
+            event.kind, event.confidence, event.content
+        ));
+    }
+    markdown
 }

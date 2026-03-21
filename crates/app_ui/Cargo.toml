@@ -14,6 +14,7 @@ ipc_schema = { path = "../ipc_schema" }
 reqwest.workspace = true
 serde.workspace = true
 tauri.workspace = true
+tauri-plugin-global-shortcut.workspace = true
 tokio.workspace = true
 
 [build-dependencies]

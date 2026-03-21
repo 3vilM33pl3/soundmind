@@ -17,8 +17,8 @@
           <p class="eyebrow">Ubuntu System Audio Assistant</p>
           <h1>Soundmind</h1>
           <p class="subtitle">
-            Live system-audio transcription, local session persistence, and concise
-            assistant actions without leaving the desktop.
+            Live system-audio transcription with explicit privacy controls, local
+            history, and on-demand assistant actions.
           </p>
         </div>
         <div class="hero-panel">
@@ -29,36 +29,107 @@
             <div class="status-chip" id="stt-chip">STT: unknown</div>
           </div>
           <div class="hero-note" id="backend-note">Waiting for backend status.</div>
+          <div class="hero-actions">
+            <button data-action="Start">Start Capture</button>
+            <button data-action="Stop" class="secondary">Stop Capture</button>
+            <button data-action="PauseCloud" class="ghost">Pause Cloud</button>
+            <button data-action="ResumeCloud" class="ghost">Resume Cloud</button>
+          </div>
         </div>
       </header>
 
-      <main class="grid">
-        <section class="panel panel-actions">
+      <main class="dashboard">
+        <section class="panel panel-transcript">
           <div class="panel-head">
-            <h2>Controls</h2>
-            <p>Drive the backend directly from the desktop shell.</p>
+            <h2>Live Transcript</h2>
+            <p>Partial speech is shown first. Final transcript is committed below.</p>
           </div>
-          <div class="button-grid">
-            <button data-action="Start">Start Capture</button>
-            <button data-action="Stop">Stop Capture</button>
-            <button data-action="PauseCloud">Pause Cloud</button>
-            <button data-action="ResumeCloud">Resume Cloud</button>
+          <div class="partial-box" id="partial-box">No partial transcript yet.</div>
+          <div class="segment-list" id="segment-list">
+            <div class="empty-state">No transcript segments committed yet.</div>
+          </div>
+        </section>
+
+        <section class="panel panel-assistant">
+          <div class="panel-head">
+            <h2>Assistant</h2>
+            <p>Manual answer, summary, and commentary controls stay visible here.</p>
+          </div>
+          <div class="button-grid compact-grid">
             <button data-action="AnswerLastQuestion">Answer Last Question</button>
             <button data-action="SummariseLastMinute">Summarise Last Minute</button>
-            <button data-action="CommentCurrentTopic">Comment Current Topic</button>
+            <button data-action="CommentCurrentTopic" class="secondary">Comment Current Topic</button>
           </div>
-
-          <div class="mode-row">
-            <label for="mode-select">Mode</label>
-            <select id="mode-select">
-              <option value="CaptionsOnly">Captions Only</option>
-              <option value="ManualQa">Manual QA</option>
-              <option value="Assisted">Assisted</option>
-              <option value="Summary">Summary</option>
-            </select>
-            <button id="apply-mode">Apply Mode</button>
+          <div class="assistant-card" id="assistant-card">
+            <div class="assistant-meta">No assistant output yet.</div>
+            <div class="assistant-content">Trigger an action once transcript is available.</div>
           </div>
+          <div class="error-list" id="error-list">
+            <div class="empty-state">No recent backend errors.</div>
+          </div>
+        </section>
 
+        <section class="panel panel-settings">
+          <div class="panel-head">
+            <h2>Settings</h2>
+            <p>Stored locally in SQLite and applied across runs.</p>
+          </div>
+          <div class="form-grid">
+            <label class="field">
+              <span>Default mode</span>
+              <select id="settings-mode">
+                <option value="CaptionsOnly">Captions Only</option>
+                <option value="ManualQa">Manual QA</option>
+                <option value="Assisted">Assisted</option>
+                <option value="Summary">Summary</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Retention in days</span>
+              <input id="retention-days" type="number" min="0" step="1" />
+              <small>`0` keeps history indefinitely.</small>
+            </label>
+            <label class="toggle">
+              <input id="transcript-storage" type="checkbox" />
+              <span>Store transcript segments locally</span>
+            </label>
+            <label class="toggle">
+              <input id="auto-start-cloud" type="checkbox" />
+              <span>Resume cloud processing automatically on launch</span>
+            </label>
+          </div>
+          <div class="settings-actions">
+            <button id="save-settings">Save Settings</button>
+            <button id="purge-history" class="ghost">Purge Old Sessions</button>
+          </div>
+          <div class="settings-note" id="settings-note">
+            Settings have not been loaded yet.
+          </div>
+        </section>
+
+        <section class="panel panel-privacy">
+          <div class="panel-head">
+            <h2>Privacy</h2>
+            <p>Make the current data path obvious at all times.</p>
+          </div>
+          <div class="privacy-grid">
+            <article class="privacy-card">
+              <div class="privacy-label">Capture path</div>
+              <div class="privacy-value" id="privacy-capture">Waiting for backend.</div>
+            </article>
+            <article class="privacy-card">
+              <div class="privacy-label">Cloud state</div>
+              <div class="privacy-value" id="privacy-cloud">Unknown</div>
+            </article>
+            <article class="privacy-card">
+              <div class="privacy-label">Stored locally</div>
+              <div class="privacy-value" id="privacy-storage">Unknown</div>
+            </article>
+            <article class="privacy-card">
+              <div class="privacy-label">Backend endpoint</div>
+              <div class="privacy-value mono" id="privacy-backend">http://127.0.0.1:8765</div>
+            </article>
+          </div>
           <dl class="facts">
             <div>
               <dt>Current sink</dt>
@@ -67,6 +138,10 @@
             <div>
               <dt>Monitor source</dt>
               <dd id="monitor-source">unknown</dd>
+            </div>
+            <div>
+              <dt>STT status</dt>
+              <dd id="stt-status">unknown</dd>
             </div>
             <div>
               <dt>Session</dt>
@@ -83,28 +158,18 @@
           </dl>
         </section>
 
-        <section class="panel panel-transcript">
+        <section class="panel panel-history">
           <div class="panel-head">
-            <h2>Live Transcript</h2>
-            <p>Partial speech at the top, committed transcript below.</p>
+            <h2>Session History</h2>
+            <p>Replay, export, or remove stored sessions without leaving the app.</p>
           </div>
-          <div class="partial-box" id="partial-box">No partial transcript yet.</div>
-          <div class="segment-list" id="segment-list">
-            <div class="empty-state">No transcript segments committed yet.</div>
-          </div>
-        </section>
-
-        <section class="panel panel-assistant">
-          <div class="panel-head">
-            <h2>Assistant</h2>
-            <p>Latest answer, summary, or commentary from the backend.</p>
-          </div>
-          <div class="assistant-card" id="assistant-card">
-            <div class="assistant-meta">No assistant output yet.</div>
-            <div class="assistant-content">Trigger an action once transcript is available.</div>
-          </div>
-          <div class="error-list" id="error-list">
-            <div class="empty-state">No recent backend errors.</div>
+          <div class="history-layout">
+            <div class="session-list" id="session-list">
+              <div class="empty-state">No stored sessions yet.</div>
+            </div>
+            <div class="session-detail" id="session-detail">
+              <div class="empty-state">Select a session to inspect it.</div>
+            </div>
           </div>
         </section>
       </main>

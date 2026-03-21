@@ -61,6 +61,54 @@ pub struct AssistantOutput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AppSettingsDto {
+    pub retention_days: u32,
+    pub transcript_storage_enabled: bool,
+    pub auto_start_cloud: bool,
+    pub default_mode: AppMode,
+}
+
+impl Default for AppSettingsDto {
+    fn default() -> Self {
+        Self {
+            retention_days: 0,
+            transcript_storage_enabled: true,
+            auto_start_cloud: true,
+            default_mode: AppMode::ManualQa,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AssistantEventDto {
+    pub id: Uuid,
+    pub session_id: Uuid,
+    pub kind: String,
+    pub content: String,
+    pub confidence: f32,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionSummaryDto {
+    pub id: Uuid,
+    pub started_at: DateTime<Utc>,
+    pub ended_at: Option<DateTime<Utc>>,
+    pub capture_device: String,
+    pub mode: String,
+    pub transcript_segment_count: u32,
+    pub assistant_event_count: u32,
+    pub latest_transcript_excerpt: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionDetailDto {
+    pub session: SessionSummaryDto,
+    pub transcript_segments: Vec<TranscriptSegmentDto>,
+    pub assistant_events: Vec<AssistantEventDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BackendStatusSnapshot {
     pub mode: AppMode,
     pub capture_state: CaptureState,

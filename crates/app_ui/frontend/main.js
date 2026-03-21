@@ -1,43 +1,100 @@
 const DEFAULT_BACKEND_URL = "http://127.0.0.1:8765";
 const backendUrl = window.localStorage.getItem("soundmind.backendUrl") || DEFAULT_BACKEND_URL;
 
+const state = {
+  snapshot: null,
+  settings: null,
+  sessions: [],
+  selectedSessionId: null,
+  selectedSession: null,
+  lastHistoryRefreshAt: 0,
+};
+
 const els = {
   backendChip: document.querySelector("#backend-chip"),
   captureChip: document.querySelector("#capture-chip"),
   cloudChip: document.querySelector("#cloud-chip"),
   sttChip: document.querySelector("#stt-chip"),
   backendNote: document.querySelector("#backend-note"),
-  modeSelect: document.querySelector("#mode-select"),
-  currentSink: document.querySelector("#current-sink"),
-  monitorSource: document.querySelector("#monitor-source"),
-  sessionId: document.querySelector("#session-id"),
-  privacyPause: document.querySelector("#privacy-pause"),
-  cloudPause: document.querySelector("#cloud-pause"),
   partialBox: document.querySelector("#partial-box"),
   segmentList: document.querySelector("#segment-list"),
   assistantCard: document.querySelector("#assistant-card"),
   errorList: document.querySelector("#error-list"),
-  applyMode: document.querySelector("#apply-mode"),
+  settingsMode: document.querySelector("#settings-mode"),
+  retentionDays: document.querySelector("#retention-days"),
+  transcriptStorage: document.querySelector("#transcript-storage"),
+  autoStartCloud: document.querySelector("#auto-start-cloud"),
+  saveSettings: document.querySelector("#save-settings"),
+  purgeHistory: document.querySelector("#purge-history"),
+  settingsNote: document.querySelector("#settings-note"),
+  currentSink: document.querySelector("#current-sink"),
+  monitorSource: document.querySelector("#monitor-source"),
+  sttStatus: document.querySelector("#stt-status"),
+  sessionId: document.querySelector("#session-id"),
+  privacyPause: document.querySelector("#privacy-pause"),
+  cloudPause: document.querySelector("#cloud-pause"),
+  privacyCapture: document.querySelector("#privacy-capture"),
+  privacyCloud: document.querySelector("#privacy-cloud"),
+  privacyStorage: document.querySelector("#privacy-storage"),
+  privacyBackend: document.querySelector("#privacy-backend"),
+  sessionList: document.querySelector("#session-list"),
+  sessionDetail: document.querySelector("#session-detail"),
 };
 
-async function fetchHealth() {
-  const response = await fetch(`${backendUrl}/health`);
+async function fetchJson(path, init = undefined) {
+  const response = await fetch(`${backendUrl}${path}`, init);
   if (!response.ok) {
-    throw new Error(`Backend returned ${response.status}`);
+    throw new Error(`${path} returned ${response.status}`);
   }
   return response.json();
 }
 
+async function fetchHealth() {
+  return fetchJson("/health");
+}
+
+async function fetchSettings() {
+  return fetchJson("/settings");
+}
+
+async function fetchSessions() {
+  return fetchJson("/sessions");
+}
+
+async function fetchSessionDetail(sessionId) {
+  return fetchJson(`/sessions/${sessionId}`);
+}
+
 async function sendAction(action) {
-  const response = await fetch(`${backendUrl}/actions`, {
+  await fetchJson("/actions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(action),
   });
+}
 
+async function putSettings(settings) {
+  return fetchJson("/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  });
+}
+
+async function purgeHistory() {
+  return fetchJson("/sessions/purge", { method: "POST" });
+}
+
+async function deleteSession(sessionId) {
+  return fetchJson(`/sessions/${sessionId}`, { method: "DELETE" });
+}
+
+async function exportSession(sessionId, format) {
+  const response = await fetch(`${backendUrl}/sessions/${sessionId}/export?format=${format}`);
   if (!response.ok) {
-    throw new Error(`Action failed with ${response.status}`);
+    throw new Error(`export failed with ${response.status}`);
   }
+  return response.text();
 }
 
 function setChip(el, label, status) {
@@ -48,34 +105,57 @@ function setChip(el, label, status) {
   }
 }
 
-function render(snapshot) {
+function classifyState(stateValue) {
+  if (stateValue === "Capturing" || stateValue === "SttActive" || stateValue === "LlmActive") {
+    return "ok";
+  }
+  if (stateValue === "Paused") {
+    return "warn";
+  }
+  if (stateValue === "Error") {
+    return "error";
+  }
+  return null;
+}
+
+function renderSnapshot(snapshot) {
+  state.snapshot = snapshot;
+
   setChip(els.backendChip, "Backend: connected", "ok");
   setChip(els.captureChip, `Capture: ${snapshot.capture_state}`, classifyState(snapshot.capture_state));
   setChip(els.cloudChip, `Cloud: ${snapshot.cloud_state}`, classifyState(snapshot.cloud_state));
   setChip(
     els.sttChip,
     `STT: ${snapshot.stt_provider || "unknown"}`,
-    snapshot.stt_status && snapshot.cloud_state === "Error" ? "error" : "ok",
+    snapshot.cloud_state === "Error" ? "error" : "ok",
   );
 
-  els.backendNote.textContent = snapshot.stt_status || "Backend connected. Waiting for the next state change.";
-  els.modeSelect.value = snapshot.mode;
+  els.backendNote.textContent =
+    snapshot.stt_status || "Backend connected. Waiting for the next state change.";
+  els.partialBox.textContent = snapshot.transcript.partial_text || "No partial transcript yet.";
   els.currentSink.textContent = snapshot.current_sink || "unknown";
   els.monitorSource.textContent = snapshot.current_monitor_source || "unknown";
+  els.sttStatus.textContent = snapshot.stt_status || "unknown";
   els.sessionId.textContent = snapshot.session_id || "not started";
   els.privacyPause.textContent = String(snapshot.privacy_pause);
   els.cloudPause.textContent = String(snapshot.cloud_pause);
-  els.partialBox.textContent = snapshot.transcript.partial_text || "No partial transcript yet.";
+  els.privacyCapture.textContent = snapshot.privacy_pause
+    ? "Local capture paused before transcript leaves the machine."
+    : "System-audio monitor capture is active.";
+  els.privacyCloud.textContent = snapshot.cloud_pause
+    ? "Cloud processing is paused."
+    : `${snapshot.cloud_state} via ${snapshot.stt_provider || "unknown provider"}.`;
+  els.privacyBackend.textContent = backendUrl;
 
   if (snapshot.transcript.segments.length === 0) {
     els.segmentList.innerHTML = `<div class="empty-state">No transcript segments committed yet.</div>`;
   } else {
     els.segmentList.innerHTML = snapshot.transcript.segments
-      .slice(-12)
+      .slice(-14)
       .map(
         (segment) => `
           <article class="segment">
-            <div class="segment-meta">${segment.source} • ${segment.start_ms}-${segment.end_ms} ms</div>
+            <div class="segment-meta">${escapeHtml(segment.source)} • ${segment.start_ms}-${segment.end_ms} ms</div>
             <div class="segment-text">${escapeHtml(segment.text)}</div>
           </article>`,
       )
@@ -85,7 +165,7 @@ function render(snapshot) {
   if (snapshot.latest_assistant) {
     els.assistantCard.innerHTML = `
       <div class="assistant-meta">
-        ${snapshot.latest_assistant.kind} • ${new Date(snapshot.latest_assistant.created_at).toLocaleString()}
+        ${escapeHtml(snapshot.latest_assistant.kind)} • ${formatTime(snapshot.latest_assistant.created_at)}
       </div>
       <div class="assistant-content">${escapeHtml(snapshot.latest_assistant.content)}</div>
     `;
@@ -105,6 +185,146 @@ function render(snapshot) {
   }
 }
 
+function renderSettings(settings) {
+  state.settings = settings;
+  els.settingsMode.value = settings.default_mode;
+  els.retentionDays.value = String(settings.retention_days);
+  els.transcriptStorage.checked = settings.transcript_storage_enabled;
+  els.autoStartCloud.checked = settings.auto_start_cloud;
+  els.privacyStorage.textContent = settings.transcript_storage_enabled
+    ? settings.retention_days === 0
+      ? "Transcripts are stored locally with no automatic expiry."
+      : `Transcripts are stored locally for ${settings.retention_days} days.`
+    : "Transcript storage is disabled for new segments.";
+  els.settingsNote.textContent = "Settings loaded from the local SQLite store.";
+}
+
+function renderSessions() {
+  if (!state.sessions.length) {
+    els.sessionList.innerHTML = `<div class="empty-state">No stored sessions yet.</div>`;
+    return;
+  }
+
+  els.sessionList.innerHTML = state.sessions
+    .map((session) => {
+      const isActive = session.id === state.selectedSessionId;
+      return `
+        <button class="session-row ${isActive ? "active" : ""}" data-session-id="${session.id}">
+          <div class="session-row-top">
+            <span>${formatTime(session.started_at)}</span>
+            <span>${escapeHtml(session.mode)}</span>
+          </div>
+          <div class="session-row-body">${escapeHtml(session.latest_transcript_excerpt || "No transcript excerpt yet.")}</div>
+          <div class="session-row-meta">
+            <span>${session.transcript_segment_count} transcript segments</span>
+            <span>${session.assistant_event_count} assistant events</span>
+          </div>
+        </button>
+      `;
+    })
+    .join("");
+
+  document.querySelectorAll("[data-session-id]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const { sessionId } = button.dataset;
+      if (!sessionId) {
+        return;
+      }
+      try {
+        await selectSession(sessionId);
+      } catch (error) {
+        renderDisconnected(error);
+      }
+    });
+  });
+}
+
+function renderSessionDetail() {
+  const session = state.selectedSession;
+  if (!session) {
+    els.sessionDetail.innerHTML = `<div class="empty-state">Select a session to inspect it.</div>`;
+    return;
+  }
+
+  const transcriptMarkup = session.transcript_segments.length
+    ? session.transcript_segments
+        .slice(-24)
+        .map(
+          (segment) => `
+            <article class="detail-row">
+              <div class="segment-meta">${segment.start_ms}-${segment.end_ms} ms • ${escapeHtml(segment.source)}</div>
+              <div class="segment-text">${escapeHtml(segment.text)}</div>
+            </article>`,
+        )
+        .join("")
+    : `<div class="empty-state">No transcript segments were stored for this session.</div>`;
+
+  const assistantMarkup = session.assistant_events.length
+    ? session.assistant_events
+        .map(
+          (event) => `
+            <article class="detail-row">
+              <div class="segment-meta">${escapeHtml(event.kind)} • ${formatTime(event.created_at)}</div>
+              <div class="segment-text">${escapeHtml(event.content)}</div>
+            </article>`,
+        )
+        .join("")
+    : `<div class="empty-state">No assistant events were stored for this session.</div>`;
+
+  els.sessionDetail.innerHTML = `
+    <div class="detail-header">
+      <div>
+        <h3>${formatTime(session.session.started_at)}</h3>
+        <p>${escapeHtml(session.session.capture_device)} • ${escapeHtml(session.session.mode)}</p>
+      </div>
+      <div class="detail-actions">
+        <button id="export-json" class="ghost">Export JSON</button>
+        <button id="export-markdown" class="ghost">Export Markdown</button>
+        <button id="delete-session" class="secondary">Delete Session</button>
+      </div>
+    </div>
+    <div class="detail-stats">
+      <div><span>Transcript</span><strong>${session.session.transcript_segment_count}</strong></div>
+      <div><span>Assistant</span><strong>${session.session.assistant_event_count}</strong></div>
+      <div><span>Ended</span><strong>${session.session.ended_at ? formatTime(session.session.ended_at) : "Running"}</strong></div>
+    </div>
+    <div class="detail-columns">
+      <div>
+        <h4>Transcript</h4>
+        <div class="detail-list">${transcriptMarkup}</div>
+      </div>
+      <div>
+        <h4>Assistant Output</h4>
+        <div class="detail-list">${assistantMarkup}</div>
+      </div>
+    </div>
+  `;
+
+  document.querySelector("#export-json")?.addEventListener("click", async () => {
+    await handleExport(session.session.id, "json");
+  });
+  document.querySelector("#export-markdown")?.addEventListener("click", async () => {
+    await handleExport(session.session.id, "markdown");
+  });
+  document.querySelector("#delete-session")?.addEventListener("click", async () => {
+    const confirmed = window.confirm(
+      "Delete this stored session, including transcript, assistant output, and audit events?",
+    );
+    if (!confirmed) {
+      return;
+    }
+    try {
+      await deleteSession(session.session.id);
+      state.selectedSessionId = null;
+      state.selectedSession = null;
+      await refreshHistory(true);
+      els.settingsNote.textContent = "Session deleted.";
+    } catch (error) {
+      renderDisconnected(error);
+    }
+  });
+}
+
 function renderDisconnected(error) {
   setChip(els.backendChip, "Backend: disconnected", "error");
   setChip(els.captureChip, "Capture: unknown", "warn");
@@ -113,19 +333,121 @@ function renderDisconnected(error) {
   els.backendNote.textContent = `Cannot reach backend at ${backendUrl}. Start it with: cargo run -p app_backend (${error.message})`;
 }
 
-function classifyState(state) {
-  if (state === "Capturing" || state === "SttActive" || state === "LlmActive") return "ok";
-  if (state === "Paused") return "warn";
-  if (state === "Error") return "error";
-  return null;
-}
-
 function escapeHtml(value) {
-  return value
+  return String(value)
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
+}
+
+function formatTime(value) {
+  return new Date(value).toLocaleString();
+}
+
+function buildSettingsPayload() {
+  return {
+    retention_days: Math.max(0, Number.parseInt(els.retentionDays.value || "0", 10) || 0),
+    transcript_storage_enabled: els.transcriptStorage.checked,
+    auto_start_cloud: els.autoStartCloud.checked,
+    default_mode: els.settingsMode.value,
+  };
+}
+
+async function selectSession(sessionId) {
+  state.selectedSessionId = sessionId;
+  state.selectedSession = await fetchSessionDetail(sessionId);
+  renderSessions();
+  renderSessionDetail();
+}
+
+async function refreshHistory(force = false) {
+  const now = Date.now();
+  if (!force && now - state.lastHistoryRefreshAt < 4000) {
+    return;
+  }
+
+  state.sessions = await fetchSessions();
+  state.lastHistoryRefreshAt = now;
+  if (!state.selectedSessionId && state.sessions.length) {
+    state.selectedSessionId = state.sessions[0].id;
+  }
+  renderSessions();
+
+  if (state.selectedSessionId) {
+    const exists = state.sessions.some((session) => session.id === state.selectedSessionId);
+    if (!exists) {
+      state.selectedSessionId = state.sessions[0]?.id || null;
+    }
+  }
+
+  if (state.selectedSessionId) {
+    state.selectedSession = await fetchSessionDetail(state.selectedSessionId);
+  } else {
+    state.selectedSession = null;
+  }
+  renderSessionDetail();
+}
+
+async function handleExport(sessionId, format) {
+  try {
+    const payload = await exportSession(sessionId, format);
+    const extension = format === "markdown" ? "md" : "json";
+    const mimeType = format === "markdown" ? "text/markdown" : "application/json";
+    const blob = new Blob([payload], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `soundmind-session-${sessionId}.${extension}`;
+    link.click();
+    URL.revokeObjectURL(url);
+    els.settingsNote.textContent = `Exported session ${sessionId} as ${extension}.`;
+  } catch (error) {
+    renderDisconnected(error);
+  }
+}
+
+async function handleSettingsSave() {
+  const previousSettings = state.settings;
+  const nextSettings = buildSettingsPayload();
+  try {
+    const saved = await putSettings(nextSettings);
+    renderSettings(saved);
+    if (!previousSettings || previousSettings.default_mode !== saved.default_mode) {
+      await sendAction({ SetMode: saved.default_mode });
+    }
+    if (!previousSettings || previousSettings.auto_start_cloud !== saved.auto_start_cloud) {
+      await sendAction(saved.auto_start_cloud ? "ResumeCloud" : "PauseCloud");
+    }
+    const snapshot = await fetchHealth();
+    renderSnapshot(snapshot);
+    els.settingsNote.textContent = "Settings saved and applied.";
+  } catch (error) {
+    renderDisconnected(error);
+  }
+}
+
+async function handlePurge() {
+  const retentionDays = Number.parseInt(els.retentionDays.value || "0", 10) || 0;
+  if (retentionDays === 0) {
+    els.settingsNote.textContent =
+      "Retention is set to 0, so purge will not delete anything automatically.";
+    return;
+  }
+  const confirmed = window.confirm(
+    `Delete stored sessions older than ${retentionDays} days? This does not affect the running session.`,
+  );
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    const result = await purgeHistory();
+    await refreshHistory(true);
+    els.settingsNote.textContent = `Purged ${result.deleted} stale sessions.`;
+  } catch (error) {
+    renderDisconnected(error);
+  }
 }
 
 document.querySelectorAll("[data-action]").forEach((button, index) => {
@@ -136,33 +458,30 @@ document.querySelectorAll("[data-action]").forEach((button, index) => {
     try {
       await sendAction(button.dataset.action);
       const snapshot = await fetchHealth();
-      render(snapshot);
+      renderSnapshot(snapshot);
     } catch (error) {
       renderDisconnected(error);
     }
   });
 });
 
-els.applyMode.classList.add("ghost");
-els.applyMode.addEventListener("click", async () => {
-  try {
-    await sendAction({ SetMode: els.modeSelect.value });
-    const snapshot = await fetchHealth();
-    render(snapshot);
-  } catch (error) {
-    renderDisconnected(error);
-  }
-});
+els.saveSettings.addEventListener("click", handleSettingsSave);
+els.purgeHistory.addEventListener("click", handlePurge);
 
 async function refreshLoop() {
   try {
-    const snapshot = await fetchHealth();
-    render(snapshot);
+    const [snapshot, settings] = await Promise.all([fetchHealth(), fetchSettings()]);
+    renderSnapshot(snapshot);
+    if (!state.settings || JSON.stringify(state.settings) !== JSON.stringify(settings)) {
+      renderSettings(settings);
+    }
+    await refreshHistory(false);
   } catch (error) {
     renderDisconnected(error);
   } finally {
-    window.setTimeout(refreshLoop, 900);
+    window.setTimeout(refreshLoop, 1200);
   }
 }
 
+els.privacyBackend.textContent = backendUrl;
 refreshLoop();
