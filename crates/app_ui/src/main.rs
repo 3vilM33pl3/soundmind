@@ -5,6 +5,8 @@ use anyhow::Result;
 use crossterm::cursor::MoveTo;
 use crossterm::event::{self, Event, KeyCode};
 use crossterm::execute;
+use crossterm::queue;
+use crossterm::style::Print;
 use crossterm::terminal::{
     Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
@@ -100,71 +102,71 @@ fn render(
     backend_url: &str,
 ) -> Result<()> {
     let mut out = stdout();
-    execute!(out, MoveTo(0, 0), Clear(ClearType::All))?;
-    writeln!(out, "Soundmind Terminal UI")?;
-    writeln!(
-        out,
+    let mut lines = vec![
+        "Soundmind Terminal UI".to_string(),
         "q quit  space start/stop  p pause-cloud  a answer  s summary  c comment  m cycle-mode"
-    )?;
-    writeln!(out, "Backend URL: {backend_url}")?;
-    writeln!(
-        out,
-        "Backend status: {}",
-        if connection.connected { "connected" } else { "disconnected" }
-    )?;
+            .to_string(),
+        format!("Backend URL: {backend_url}"),
+        format!(
+            "Backend status: {}",
+            if connection.connected { "connected" } else { "disconnected" }
+        ),
+    ];
+
     if let Some(error) = &connection.last_error {
-        writeln!(out, "Backend note: {error}")?;
+        lines.push(format!("Backend note: {error}"));
     }
-    writeln!(out)?;
-    writeln!(out, "Mode: {:?}", snapshot.mode)?;
-    writeln!(out, "Capture: {:?}  Cloud: {:?}", snapshot.capture_state, snapshot.cloud_state)?;
-    writeln!(
-        out,
-        "Current sink: {}",
-        snapshot.current_sink.clone().unwrap_or_else(|| "unknown".to_string())
-    )?;
-    writeln!(
-        out,
-        "Privacy pause: {}  Cloud pause: {}",
-        snapshot.privacy_pause, snapshot.cloud_pause
-    )?;
-    writeln!(
-        out,
-        "Session: {}",
-        snapshot.session_id.map(|id| id.to_string()).unwrap_or_else(|| "not started".to_string())
-    )?;
-    writeln!(out)?;
-    writeln!(out, "Partial transcript:")?;
-    writeln!(
-        out,
-        "{}",
-        snapshot.transcript.partial_text.clone().unwrap_or_else(|| "-".to_string())
-    )?;
-    writeln!(out)?;
-    writeln!(out, "Committed transcript:")?;
+
+    lines.extend([
+        String::new(),
+        format!("Mode: {:?}", snapshot.mode),
+        format!("Capture: {:?}  Cloud: {:?}", snapshot.capture_state, snapshot.cloud_state),
+        format!(
+            "Current sink: {}",
+            snapshot.current_sink.clone().unwrap_or_else(|| "unknown".to_string())
+        ),
+        format!("Privacy pause: {}  Cloud pause: {}", snapshot.privacy_pause, snapshot.cloud_pause),
+        format!(
+            "Session: {}",
+            snapshot
+                .session_id
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "not started".to_string())
+        ),
+        String::new(),
+        "Partial transcript:".to_string(),
+        snapshot.transcript.partial_text.clone().unwrap_or_else(|| "-".to_string()),
+        String::new(),
+        "Committed transcript:".to_string(),
+    ]);
+
     if snapshot.transcript.segments.is_empty() {
-        writeln!(out, "-")?;
+        lines.push("-".to_string());
     } else {
-        for segment in snapshot.transcript.segments.iter().rev().take(8).rev() {
-            writeln!(out, "[{}-{}ms] {}", segment.start_ms, segment.end_ms, segment.text)?;
-        }
+        lines.extend(snapshot.transcript.segments.iter().rev().take(8).rev().map(|segment| {
+            format!("[{}-{}ms] {}", segment.start_ms, segment.end_ms, segment.text)
+        }));
     }
-    writeln!(out)?;
-    writeln!(out, "Latest assistant output:")?;
+
+    lines.extend([String::new(), "Latest assistant output:".to_string()]);
+
     if let Some(assistant) = &snapshot.latest_assistant {
-        writeln!(out, "{:?} @ {}:", assistant.kind, assistant.created_at.to_rfc3339())?;
-        writeln!(out, "{}", assistant.content)?;
+        lines.push(format!("{:?} @ {}:", assistant.kind, assistant.created_at.to_rfc3339()));
+        lines.push(assistant.content.clone());
     } else {
-        writeln!(out, "-")?;
+        lines.push("-".to_string());
     }
-    writeln!(out)?;
-    writeln!(out, "Recent errors:")?;
+
+    lines.extend([String::new(), "Recent errors:".to_string()]);
     if snapshot.recent_errors.is_empty() {
-        writeln!(out, "-")?;
+        lines.push("-".to_string());
     } else {
-        for error in &snapshot.recent_errors {
-            writeln!(out, "- {}", error)?;
-        }
+        lines.extend(snapshot.recent_errors.iter().map(|error| format!("- {error}")));
+    }
+
+    execute!(out, MoveTo(0, 0), Clear(ClearType::All))?;
+    for (row, line) in lines.iter().enumerate() {
+        queue!(out, MoveTo(0, row as u16), Print(line))?;
     }
     out.flush()?;
     Ok(())
