@@ -12,16 +12,12 @@
   </head>
   <body>
     <div class="shell">
-      <header class="hero">
-        <div class="hero-copy">
+      <header class="topbar">
+        <div class="topbar-title">
           <p class="eyebrow">Ubuntu System Audio Assistant</p>
           <h1>Soundmind</h1>
-          <p class="subtitle">
-            Live system-audio transcription with explicit privacy controls, local
-            history, and on-demand assistant actions.
-          </p>
         </div>
-        <div class="hero-panel">
+        <div class="topbar-panel">
           <div class="status-grid">
             <div class="status-chip" id="backend-chip">Backend: connecting</div>
             <div class="status-chip" id="capture-chip">Capture: idle</div>
@@ -60,14 +56,14 @@
               <h2>Assistant</h2>
               <p>Answer, summary, and commentary stay next to the live transcript.</p>
             </div>
+            <div class="assistant-card assistant-card-prominent" id="assistant-card">
+              <div class="assistant-meta">No assistant output yet.</div>
+              <div class="assistant-content">Trigger an action once transcript is available.</div>
+            </div>
             <div class="assistant-actions">
               <button data-action="AnswerLastQuestion" id="answer-question-button">Answer Last Question</button>
               <button data-action="SummariseLastMinute">Summarise Last Minute</button>
               <button data-action="CommentCurrentTopic" class="secondary">Comment Current Topic</button>
-            </div>
-            <div class="assistant-card" id="assistant-card">
-              <div class="assistant-meta">No assistant output yet.</div>
-              <div class="assistant-content">Trigger an action once transcript is available.</div>
             </div>
             <div class="error-list" id="error-list">
               <div class="empty-state">No recent backend errors.</div>
