@@ -602,6 +602,17 @@ fn load_config() -> Result<RootConfig> {
         }
     }
 
+    if let Ok(model) = std::env::var("ELEVENLABS_MODEL") {
+        if !model.trim().is_empty() {
+            config.providers.elevenlabs.model = model;
+        }
+    } else if config.providers.elevenlabs.model == "scribe_v1" {
+        info!(
+            "Overriding legacy realtime STT model scribe_v1 with scribe_v2_realtime for the ElevenLabs realtime endpoint"
+        );
+        config.providers.elevenlabs.model = "scribe_v2_realtime".to_string();
+    }
+
     info!(
         retention_days = if config.storage.retention_days == 0 {
             "infinite".to_string()
