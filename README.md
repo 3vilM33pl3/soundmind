@@ -12,7 +12,8 @@ This repository currently includes:
 - a `parec`/`pactl` capture backend for Ubuntu PulseAudio or PipeWire
 - a real ElevenLabs Scribe realtime transcriber with automatic fallback to the
   mock adapter when live startup fails
-- a backend HTTP control plane and a terminal dashboard client
+- a backend HTTP control plane, a Tauri desktop shell, and a terminal dashboard
+  debug client
 
 ## Quick start
 
@@ -30,6 +31,12 @@ cargo run -p app_backend
 cargo run -p app_ui
 ```
 
+5. If you want the old debug client instead of the desktop shell:
+
+```bash
+cargo run -p app_ui --bin terminal_ui
+```
+
 ## Current status
 
 The repository implements the first vertical slice of the architecture:
@@ -40,7 +47,8 @@ The repository implements the first vertical slice of the architecture:
 - transcript state and rolling context helpers
 - SQLite persistence and audit/session tracking
 - OpenAI Responses API adapter with a local fallback
-- terminal UI for live status and manual actions
+- Tauri desktop UI for live status and manual actions
+- terminal UI retained as a debug client
 
-The desktop shell, tray support, hotkeys, and packaging are still separate
-follow-up milestones.
+Tray support, hotkeys, settings/history/privacy UX, and packaging are still
+separate follow-up milestones.
