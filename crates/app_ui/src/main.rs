@@ -104,8 +104,8 @@ fn render(
     let mut out = stdout();
     let mut lines = vec![
         "Soundmind Terminal UI".to_string(),
-        "q quit  space start/stop  p pause-cloud  a answer  s summary  c comment  m cycle-mode"
-            .to_string(),
+        "q quit  space start/stop  p pause-cloud".to_string(),
+        "a answer  s summary  c comment  m cycle-mode".to_string(),
         format!("Backend URL: {backend_url}"),
         format!(
             "Backend status: {}",
@@ -124,6 +124,18 @@ fn render(
         format!(
             "Current sink: {}",
             snapshot.current_sink.clone().unwrap_or_else(|| "unknown".to_string())
+        ),
+        format!(
+            "Monitor source: {}",
+            snapshot.current_monitor_source.clone().unwrap_or_else(|| "unknown".to_string())
+        ),
+        format!(
+            "STT: {}",
+            snapshot.stt_provider.clone().unwrap_or_else(|| "unknown".to_string())
+        ),
+        format!(
+            "STT status: {}",
+            snapshot.stt_status.clone().unwrap_or_else(|| "-".to_string())
         ),
         format!("Privacy pause: {}  Cloud pause: {}", snapshot.privacy_pause, snapshot.cloud_pause),
         format!(
