@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Soundmind">
+  <defs>
+    <linearGradient id="soundmind-bg" x1="0%" x2="100%" y1="0%" y2="100%">
+      <stop offset="0%" stop-color="#245c73" />
+      <stop offset="100%" stop-color="#b85c38" />
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="56" fill="url(#soundmind-bg)" />
+  <path
+    d="M68 132c14-40 36-60 60-60 32 0 60 32 60 72 0 24-9 44-26 60"
+    fill="none"
+    stroke="#f8f5ee"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    stroke-width="24"
+  />
+  <path
+    d="M96 180c10-18 22-28 36-28 14 0 24 8 34 24"
+    fill="none"
+    stroke="#f8f5ee"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    stroke-width="18"
+  />
+  <circle cx="104" cy="104" r="10" fill="#f8f5ee" />
+  <circle cx="156" cy="118" r="10" fill="#f8f5ee" />
+</svg>
