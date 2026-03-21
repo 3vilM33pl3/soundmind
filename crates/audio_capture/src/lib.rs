@@ -36,6 +36,7 @@ pub struct AudioFrame {
 pub enum CaptureEvent {
     DeviceChanged(CaptureDevice),
     Frames(AudioFrame),
+    Recovering(String),
     Error(String),
     Ended,
 }
@@ -125,23 +126,55 @@ impl AudioSource for ParecMonitorAudioSource {
         let frame_len = samples_per_frame(&self.config);
         let bytes_per_frame = frame_len * 2;
         let start = Instant::now();
-        let mut current_device = resolve_default_monitor().await?;
+        let mut current_device = loop {
+            match resolve_default_monitor().await {
+                Ok(device) => break device,
+                Err(error) => {
+                    sender
+                        .send(CaptureEvent::Recovering(format!(
+                            "waiting for a default monitor source: {error}"
+                        )))
+                        .await
+                        .ok();
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+            }
+        };
+        let mut restart_delay = Duration::from_millis(250);
 
         sender.send(CaptureEvent::DeviceChanged(current_device.clone())).await.ok();
 
         loop {
-            let mut child = spawn_parec(&self.config, &current_device.monitor_source)?;
+            let mut child = match spawn_parec(&self.config, &current_device.monitor_source) {
+                Ok(child) => child,
+                Err(error) => {
+                    sender
+                        .send(CaptureEvent::Recovering(format!(
+                            "failed to bind monitor capture for {}: {error}",
+                            current_device.monitor_source
+                        )))
+                        .await
+                        .ok();
+                    tokio::time::sleep(restart_delay).await;
+                    restart_delay = next_backoff(restart_delay);
+                    current_device = wait_for_default_monitor(&sender).await?;
+                    sender.send(CaptureEvent::DeviceChanged(current_device.clone())).await.ok();
+                    continue;
+                }
+            };
             let mut stdout = child.stdout.take().context("parec stdout was not piped")?;
             let mut buf = vec![0_u8; bytes_per_frame];
             let mut poll = tokio::time::interval(Duration::from_secs(2));
 
-            loop {
+            let requested_restart = loop {
                 tokio::select! {
                     read_result = stdout.read_exact(&mut buf) => {
                         if let Err(error) = read_result {
                             warn!(?error, "parec stream ended; restarting capture");
-                            sender.send(CaptureEvent::Error(error.to_string())).await.ok();
-                            break;
+                            sender.send(CaptureEvent::Recovering(format!(
+                                "parec stream ended; restarting capture: {error}"
+                            ))).await.ok();
+                            break true;
                         }
 
                         let samples = buf
@@ -161,24 +194,47 @@ impl AudioSource for ParecMonitorAudioSource {
 
                         if sender.send(event).await.is_err() {
                             let _ = child.kill().await;
+                            let _ = child.wait().await;
                             return Ok(());
                         }
                     }
                     _ = poll.tick() => {
-                        let latest = resolve_default_monitor().await?;
-                        if latest.monitor_source != current_device.monitor_source {
-                            info!(
-                                old = current_device.monitor_source,
-                                new = latest.monitor_source,
-                                "default sink changed; rebinding monitor capture"
-                            );
-                            current_device = latest.clone();
-                            sender.send(CaptureEvent::DeviceChanged(latest)).await.ok();
-                            let _ = child.kill().await;
-                            break;
+                        match resolve_default_monitor().await {
+                            Ok(latest) => {
+                                if latest.monitor_source != current_device.monitor_source {
+                                    info!(
+                                        old = current_device.monitor_source,
+                                        new = latest.monitor_source,
+                                        "default sink changed; rebinding monitor capture"
+                                    );
+                                    current_device = latest.clone();
+                                    sender.send(CaptureEvent::DeviceChanged(latest)).await.ok();
+                                    let _ = child.kill().await;
+                                    let _ = child.wait().await;
+                                    restart_delay = Duration::from_millis(250);
+                                    break true;
+                                }
+                            }
+                            Err(error) => {
+                                sender
+                                    .send(CaptureEvent::Recovering(format!(
+                                        "failed to refresh the default monitor source: {error}"
+                                    )))
+                                    .await
+                                    .ok();
+                            }
                         }
                     }
                 }
+            };
+
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+
+            if requested_restart {
+                tokio::time::sleep(restart_delay).await;
+                restart_delay = next_backoff(restart_delay);
+                continue;
             }
         }
     }
@@ -233,6 +289,27 @@ async fn resolve_default_monitor() -> Result<CaptureDevice> {
     })
 }
 
+async fn wait_for_default_monitor(sender: &mpsc::Sender<CaptureEvent>) -> Result<CaptureDevice> {
+    loop {
+        match resolve_default_monitor().await {
+            Ok(device) => return Ok(device),
+            Err(error) => {
+                sender
+                    .send(CaptureEvent::Recovering(format!(
+                        "waiting for a usable monitor source: {error}"
+                    )))
+                    .await
+                    .ok();
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
+    }
+}
+
+fn next_backoff(current: Duration) -> Duration {
+    (current.saturating_mul(2)).min(Duration::from_secs(5))
+}
+
 async fn command_stdout(program: &str, args: &[&str]) -> Result<String> {
     let output = Command::new(program)
         .args(args)
@@ -256,5 +333,12 @@ mod tests {
         let config = CaptureConfig { frame_ms: 20, sample_rate_hz: 16_000, channels: 1 };
 
         assert_eq!(samples_per_frame(&config), 320);
+    }
+
+    #[test]
+    fn capture_backoff_caps_at_five_seconds() {
+        assert_eq!(next_backoff(Duration::from_millis(250)), Duration::from_millis(500));
+        assert_eq!(next_backoff(Duration::from_secs(4)), Duration::from_secs(5));
+        assert_eq!(next_backoff(Duration::from_secs(5)), Duration::from_secs(5));
     }
 }

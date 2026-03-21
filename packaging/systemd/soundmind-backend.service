@@ -1,0 +1,16 @@
+[Unit]
+Description=Soundmind backend
+After=default.target pipewire.service
+
+[Service]
+Type=simple
+WorkingDirectory=@WORKING_DIR@
+Environment=SOUNDMIND_CONFIG=@CONFIG_DIR@/config.toml
+Environment=SOUNDMIND_KEYS_ENV=@CONFIG_DIR@/keys.env
+Environment=RUST_LOG=info,app_backend=debug
+ExecStart=@BACKEND_BIN@
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
