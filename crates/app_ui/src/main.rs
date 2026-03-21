@@ -3,7 +3,7 @@ use reqwest::Client;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{App, AppHandle, Manager, Runtime, WindowEvent};
-use tauri_plugin_global_shortcut::{Builder as ShortcutBuilder, ShortcutState};
+use tauri_plugin_global_shortcut::{Builder as ShortcutBuilder, GlobalShortcutExt, ShortcutState};
 
 const BACKEND_URL: &str = "http://127.0.0.1:8765";
 
@@ -18,39 +18,11 @@ fn main() {
 }
 
 fn run() -> Result<()> {
-    let shortcuts = ShortcutBuilder::new()
-        .with_shortcuts([
-            "CmdOrCtrl+Alt+Shift+M",
-            "CmdOrCtrl+Alt+Shift+A",
-            "CmdOrCtrl+Alt+Shift+S",
-            "CmdOrCtrl+Alt+Shift+C",
-        ])?
-        .with_handler(|app, shortcut, event| {
-            if event.state != ShortcutState::Pressed {
-                return;
-            }
-
-            match shortcut.clone().into_string().as_str() {
-                "Ctrl+Alt+Shift+M" | "Super+Alt+Shift+M" | "Meta+Alt+Shift+M" => {
-                    let _ = toggle_main_window(app);
-                }
-                "Ctrl+Alt+Shift+A" | "Super+Alt+Shift+A" | "Meta+Alt+Shift+A" => {
-                    spawn_action("AnswerLastQuestion");
-                }
-                "Ctrl+Alt+Shift+S" | "Super+Alt+Shift+S" | "Meta+Alt+Shift+S" => {
-                    spawn_action("SummariseLastMinute");
-                }
-                "Ctrl+Alt+Shift+C" | "Super+Alt+Shift+C" | "Meta+Alt+Shift+C" => {
-                    spawn_action("CommentCurrentTopic");
-                }
-                _ => {}
-            }
-        });
-
     tauri::Builder::default()
-        .plugin(shortcuts.build())
+        .plugin(ShortcutBuilder::new().build())
         .setup(|app| {
             install_tray(app)?;
+            install_global_shortcuts(app.handle());
             Ok(())
         })
         .on_menu_event(|app, event| match event.id().as_ref() {
@@ -90,6 +62,35 @@ fn run() -> Result<()> {
         .context("failed to start tauri runtime")?;
 
     Ok(())
+}
+
+fn install_global_shortcuts<R: Runtime>(app: &AppHandle<R>) {
+    register_shortcut(app, "CmdOrCtrl+Alt+Shift+M", |app| {
+        let _ = toggle_main_window(app);
+    });
+    register_shortcut(app, "CmdOrCtrl+Alt+Shift+A", |_| {
+        spawn_action("AnswerLastQuestion");
+    });
+    register_shortcut(app, "CmdOrCtrl+Alt+Shift+S", |_| {
+        spawn_action("SummariseLastMinute");
+    });
+    register_shortcut(app, "CmdOrCtrl+Alt+Shift+C", |_| {
+        spawn_action("CommentCurrentTopic");
+    });
+}
+
+fn register_shortcut<R, F>(app: &AppHandle<R>, shortcut: &str, action: F)
+where
+    R: Runtime,
+    F: Fn(&AppHandle<R>) + Send + Sync + 'static,
+{
+    if let Err(error) = app.global_shortcut().on_shortcut(shortcut, move |app, _shortcut, event| {
+        if event.state == ShortcutState::Pressed {
+            action(app);
+        }
+    }) {
+        eprintln!("failed to register global shortcut {shortcut}: {error}");
+    }
 }
 
 fn install_tray(app: &mut App<tauri::Wry>) -> Result<()> {

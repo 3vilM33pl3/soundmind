@@ -31,6 +31,8 @@ use tracing::{error, info, warn};
 use transcript_core::{TranscriptSegment, TranscriptState};
 use uuid::Uuid;
 
+const MAX_HEALTH_SEGMENTS: usize = 48;
+
 #[derive(Debug, Clone, Deserialize)]
 struct RootConfig {
     app: AppSection,
@@ -580,7 +582,11 @@ async fn refresh_snapshot(
     let mut locked = snapshot.write().await;
     locked.transcript = TranscriptSnapshot {
         partial_text: transcript.partial_text().map(ToOwned::to_owned),
-        segments: transcript.segments().iter().cloned().map(to_dto).collect(),
+        segments: transcript
+            .last_n_segments(MAX_HEALTH_SEGMENTS)
+            .into_iter()
+            .map(to_dto)
+            .collect(),
     };
 }
 

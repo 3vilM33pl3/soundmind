@@ -7,6 +7,7 @@ const state = {
   sessions: [],
   selectedSessionId: null,
   selectedSession: null,
+  lastSettingsRefreshAt: 0,
   lastHistoryRefreshAt: 0,
 };
 
@@ -363,7 +364,7 @@ async function selectSession(sessionId) {
 
 async function refreshHistory(force = false) {
   const now = Date.now();
-  if (!force && now - state.lastHistoryRefreshAt < 4000) {
+  if (!force && now - state.lastHistoryRefreshAt < 6000) {
     return;
   }
 
@@ -389,6 +390,19 @@ async function refreshHistory(force = false) {
   renderSessionDetail();
 }
 
+async function refreshSettings(force = false) {
+  const now = Date.now();
+  if (!force && now - state.lastSettingsRefreshAt < 12000) {
+    return;
+  }
+
+  const settings = await fetchSettings();
+  state.lastSettingsRefreshAt = now;
+  if (!state.settings || JSON.stringify(state.settings) !== JSON.stringify(settings)) {
+    renderSettings(settings);
+  }
+}
+
 async function handleExport(sessionId, format) {
   try {
     const payload = await exportSession(sessionId, format);
@@ -412,6 +426,7 @@ async function handleSettingsSave() {
   const nextSettings = buildSettingsPayload();
   try {
     const saved = await putSettings(nextSettings);
+    state.lastSettingsRefreshAt = Date.now();
     renderSettings(saved);
     if (!previousSettings || previousSettings.default_mode !== saved.default_mode) {
       await sendAction({ SetMode: saved.default_mode });
@@ -470,16 +485,14 @@ els.purgeHistory.addEventListener("click", handlePurge);
 
 async function refreshLoop() {
   try {
-    const [snapshot, settings] = await Promise.all([fetchHealth(), fetchSettings()]);
+    const snapshot = await fetchHealth();
     renderSnapshot(snapshot);
-    if (!state.settings || JSON.stringify(state.settings) !== JSON.stringify(settings)) {
-      renderSettings(settings);
-    }
+    await refreshSettings(false);
     await refreshHistory(false);
   } catch (error) {
     renderDisconnected(error);
   } finally {
-    window.setTimeout(refreshLoop, 1200);
+    window.setTimeout(refreshLoop, 300);
   }
 }
 
