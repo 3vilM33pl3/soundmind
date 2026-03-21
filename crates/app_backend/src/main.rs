@@ -588,6 +588,7 @@ async fn refresh_snapshot(
             .map(to_dto)
             .collect(),
     };
+    locked.detected_question = transcript.last_question_candidate().map(to_dto);
 }
 
 fn to_dto(segment: TranscriptSegment) -> TranscriptSegmentDto {
