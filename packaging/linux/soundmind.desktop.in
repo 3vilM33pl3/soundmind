@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Soundmind
+Comment=Ubuntu system-audio assistant
+Exec=@APP_BIN@
+Icon=soundmind
+Terminal=false
+Categories=AudioVideo;Utility;
+StartupNotify=true

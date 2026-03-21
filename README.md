@@ -14,6 +14,8 @@ This repository currently includes:
   mock adapter when live startup fails
 - a backend HTTP control plane, a Tauri desktop shell, and a terminal dashboard
   debug client
+- persistent settings, local session history, transcript export, privacy state,
+  tray controls, and global shortcuts in the desktop shell
 
 ## Quick start
 
@@ -37,6 +39,48 @@ cargo run -p app_ui
 cargo run -p app_ui --bin terminal_ui
 ```
 
+## Desktop shell
+
+The Tauri UI now includes:
+
+- live transcript and assistant panels
+- persistent settings for retention, transcript storage, auto-start cloud, and
+  default mode
+- local session history with detail view, JSON export, Markdown export, and
+  delete/purge actions
+- always-visible privacy state for capture, cloud, and local storage
+- tray controls plus global shortcuts for showing the window and triggering
+  answer, summary, and commentary actions
+
+Default global shortcuts:
+
+- `Ctrl+Alt+Shift+M`: show or hide the main window
+- `Ctrl+Alt+Shift+A`: answer the last question
+- `Ctrl+Alt+Shift+S`: summarise the last minute
+- `Ctrl+Alt+Shift+C`: comment on the current topic
+
+## User service install
+
+For a local user install with a persistent backend service:
+
+```bash
+./scripts/install-user-service.sh
+```
+
+This script:
+
+- builds release binaries
+- installs wrappers under `~/.local/bin`
+- installs config under `~/.config/soundmind`
+- installs a desktop entry and icon
+- enables `soundmind-backend.service` with `systemctl --user`
+
+To build a redistributable tarball without installing it:
+
+```bash
+./scripts/package-release.sh
+```
+
 ## Current status
 
 The repository implements the first vertical slice of the architecture:
@@ -47,8 +91,7 @@ The repository implements the first vertical slice of the architecture:
 - transcript state and rolling context helpers
 - SQLite persistence and audit/session tracking
 - OpenAI Responses API adapter with a local fallback
-- Tauri desktop UI for live status and manual actions
+- Tauri desktop UI for live status, settings, history, export, tray, and
+  privacy controls
 - terminal UI retained as a debug client
-
-Tray support, hotkeys, settings/history/privacy UX, and packaging are still
-separate follow-up milestones.
+- user-service and packaging assets for Linux installs
