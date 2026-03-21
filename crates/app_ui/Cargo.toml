@@ -3,6 +3,8 @@ name = "app_ui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+build = "build.rs"
+default-run = "app_ui"
 
 [dependencies]
 anyhow.workspace = true
@@ -11,4 +13,8 @@ crossterm.workspace = true
 ipc_schema = { path = "../ipc_schema" }
 reqwest.workspace = true
 serde.workspace = true
+tauri.workspace = true
 tokio.workspace = true
+
+[build-dependencies]
+tauri-build.workspace = true

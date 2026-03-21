@@ -23,6 +23,7 @@ use serde::Deserialize;
 use storage_sqlite::Storage;
 use stt_scribe::{MockTranscriber, ScribeRealtimeConfig, ScribeRealtimeTranscriber, Transcriber};
 use tokio::sync::{RwLock, mpsc};
+use tower_http::cors::CorsLayer;
 use tracing::{error, info, warn};
 use transcript_core::{TranscriptSegment, TranscriptState};
 use uuid::Uuid;
@@ -118,6 +119,7 @@ async fn main() -> Result<()> {
     let app = Router::new()
         .route("/health", get(health))
         .route("/actions", post(post_action))
+        .layer(CorsLayer::permissive())
         .with_state(app_state);
 
     let address: SocketAddr = config.app.http_bind.parse().context("invalid http_bind")?;
