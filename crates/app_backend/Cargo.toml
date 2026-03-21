@@ -12,6 +12,7 @@ axum.workspace = true
 chrono.workspace = true
 context_engine = { path = "../context_engine" }
 dirs.workspace = true
+dotenvy.workspace = true
 ipc_schema = { path = "../ipc_schema" }
 llm_openai = { path = "../llm_openai" }
 policy_engine = { path = "../policy_engine" }

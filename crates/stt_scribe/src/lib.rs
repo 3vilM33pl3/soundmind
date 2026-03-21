@@ -1,8 +1,19 @@
-use anyhow::Result;
+use std::sync::Arc;
+
+use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use audio_pipeline::AudioChunk;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use futures_util::{SinkExt, StreamExt, stream::SplitSink};
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
+use serde_json::{Value, json};
+use tokio::net::TcpStream;
+use tokio::sync::{Mutex, mpsc};
+use tokio_tungstenite::{
+    MaybeTlsStream, WebSocketStream, connect_async,
+    tungstenite::{Message, client::IntoClientRequest, http::Request},
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PartialTranscript {
@@ -40,6 +51,233 @@ pub trait Transcriber: Send {
     async fn push_audio(&mut self, chunk: AudioChunk) -> Result<()>;
     fn try_recv_event(&mut self) -> Option<TranscriberEvent>;
     async fn stop(&mut self) -> Result<()>;
+}
+
+#[derive(Debug, Clone)]
+pub struct ScribeRealtimeConfig {
+    pub api_key: String,
+    pub model_id: String,
+    pub sample_rate_hz: u32,
+    pub language_code: Option<String>,
+    pub include_timestamps: bool,
+    pub enable_logging: bool,
+}
+
+impl Default for ScribeRealtimeConfig {
+    fn default() -> Self {
+        Self {
+            api_key: String::new(),
+            model_id: "scribe_v2_realtime".to_string(),
+            sample_rate_hz: 16_000,
+            language_code: Some("en".to_string()),
+            include_timestamps: true,
+            enable_logging: true,
+        }
+    }
+}
+
+pub struct ScribeRealtimeTranscriber {
+    config: ScribeRealtimeConfig,
+    event_tx: mpsc::Sender<TranscriberEvent>,
+    event_rx: mpsc::Receiver<TranscriberEvent>,
+    writer: Option<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>,
+    reader_task: Option<tokio::task::JoinHandle<()>>,
+    last_window: Arc<Mutex<Option<(u64, u64)>>>,
+}
+
+impl ScribeRealtimeTranscriber {
+    pub fn new(config: ScribeRealtimeConfig) -> Self {
+        let (event_tx, event_rx) = mpsc::channel(128);
+        Self {
+            config,
+            event_tx,
+            event_rx,
+            writer: None,
+            reader_task: None,
+            last_window: Arc::new(Mutex::new(None)),
+        }
+    }
+}
+
+#[async_trait]
+impl Transcriber for ScribeRealtimeTranscriber {
+    async fn start(&mut self) -> Result<()> {
+        let mut request = build_request(&self.config)?;
+        request
+            .headers_mut()
+            .insert("xi-api-key", self.config.api_key.parse().context("invalid xi-api-key header")?);
+
+        let (stream, _response) =
+            connect_async(request).await.context("failed to connect to ElevenLabs realtime STT")?;
+        let (writer, mut reader) = stream.split();
+        self.writer = Some(writer);
+
+        let event_tx = self.event_tx.clone();
+        let last_window = Arc::clone(&self.last_window);
+        self.reader_task = Some(tokio::spawn(async move {
+            while let Some(message) = reader.next().await {
+                match message {
+                    Ok(Message::Text(payload)) => {
+                        if let Some(event) = parse_realtime_event(&payload, &last_window).await {
+                            event_tx.send(event).await.ok();
+                        }
+                    }
+                    Ok(Message::Close(frame)) => {
+                        let reason = frame
+                            .map(|frame| frame.reason.to_string())
+                            .unwrap_or_else(|| "websocket closed".to_string());
+                        event_tx.send(TranscriberEvent::Error(reason)).await.ok();
+                        break;
+                    }
+                    Ok(Message::Binary(_))
+                    | Ok(Message::Ping(_))
+                    | Ok(Message::Pong(_))
+                    | Ok(Message::Frame(_)) => {}
+                    Err(error) => {
+                        event_tx
+                            .send(TranscriberEvent::Error(format!(
+                                "ElevenLabs websocket read failed: {error}"
+                            )))
+                            .await
+                            .ok();
+                        break;
+                    }
+                }
+            }
+        }));
+
+        self.event_tx
+            .send(TranscriberEvent::Health(TranscriberHealth {
+                healthy: true,
+                message: "connected to ElevenLabs Scribe realtime".to_string(),
+            }))
+            .await
+            .ok();
+        Ok(())
+    }
+
+    async fn push_audio(&mut self, chunk: AudioChunk) -> Result<()> {
+        let writer = self.writer.as_mut().context("ElevenLabs realtime writer is not connected")?;
+        *self.last_window.lock().await = Some((chunk.start_ms, chunk.end_ms));
+
+        let pcm_bytes = chunk
+            .samples
+            .iter()
+            .flat_map(|sample| {
+                let clamped = sample.clamp(-1.0, 1.0);
+                ((clamped * i16::MAX as f32) as i16).to_le_bytes()
+            })
+            .collect::<Vec<_>>();
+
+        let payload = json!({
+            "message_type": "input_audio_chunk",
+            "audio_base_64": BASE64_STANDARD.encode(pcm_bytes),
+            "commit": true,
+            "sample_rate": self.config.sample_rate_hz,
+        });
+
+        writer
+            .send(Message::Text(payload.to_string().into()))
+            .await
+            .context("failed to send audio chunk to ElevenLabs")?;
+        Ok(())
+    }
+
+    fn try_recv_event(&mut self) -> Option<TranscriberEvent> {
+        self.event_rx.try_recv().ok()
+    }
+
+    async fn stop(&mut self) -> Result<()> {
+        if let Some(writer) = self.writer.as_mut() {
+            let _ = writer.send(Message::Close(None)).await;
+        }
+        if let Some(reader_task) = self.reader_task.take() {
+            reader_task.abort();
+        }
+        self.writer = None;
+        Ok(())
+    }
+}
+
+fn build_request(config: &ScribeRealtimeConfig) -> Result<Request<()>> {
+    let mut url = format!(
+        "wss://api.elevenlabs.io/v1/speech-to-text/realtime?model_id={}&include_timestamps={}&audio_format=pcm_16000&commit_strategy=manual&enable_logging={}",
+        config.model_id,
+        config.include_timestamps,
+        config.enable_logging
+    );
+
+    if let Some(language_code) = &config.language_code {
+        url.push_str("&language_code=");
+        url.push_str(language_code);
+    }
+
+    url.into_client_request().map_err(|error| anyhow!(error))
+}
+
+async fn parse_realtime_event(
+    payload: &str,
+    last_window: &Arc<Mutex<Option<(u64, u64)>>>,
+) -> Option<TranscriberEvent> {
+    let value: Value = match serde_json::from_str(payload) {
+        Ok(value) => value,
+        Err(error) => {
+            return Some(TranscriberEvent::Error(format!(
+                "failed to decode ElevenLabs event payload: {error}"
+            )));
+        }
+    };
+
+    let message_type = value.get("message_type").and_then(Value::as_str).unwrap_or_default();
+    let text = value
+        .get("text")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_string();
+
+    match message_type {
+        "session_started" => Some(TranscriberEvent::Health(TranscriberHealth {
+            healthy: true,
+            message: value
+                .get("session_id")
+                .and_then(Value::as_str)
+                .map(|session_id| format!("ElevenLabs session started: {session_id}"))
+                .unwrap_or_else(|| "ElevenLabs session started".to_string()),
+        })),
+        "partial_transcript" if !text.is_empty() => {
+            let window = *last_window.lock().await;
+            let (start_ms, end_ms) = window.unwrap_or((0, 0));
+            Some(TranscriberEvent::PartialTranscript(PartialTranscript {
+                start_ms,
+                end_ms,
+                text,
+                source: "elevenlabs_scribe_realtime".to_string(),
+            }))
+        }
+        "committed_transcript" | "committed_transcript_with_timestamps" if !text.is_empty() => {
+            let window = *last_window.lock().await;
+            let (start_ms, end_ms) = window.unwrap_or((0, 0));
+            Some(TranscriberEvent::FinalTranscript(FinalTranscript {
+                start_ms,
+                end_ms,
+                text,
+                source: "elevenlabs_scribe_realtime".to_string(),
+            }))
+        }
+        other if other.contains("error") => Some(TranscriberEvent::Error(extract_error_message(&value))),
+        _ => None,
+    }
+}
+
+fn extract_error_message(value: &Value) -> String {
+    value
+        .get("message")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("detail").and_then(Value::as_str))
+        .or_else(|| value.get("error").and_then(Value::as_str))
+        .unwrap_or("ElevenLabs reported an unknown error")
+        .to_string()
 }
 
 pub struct MockTranscriber {
@@ -128,5 +366,46 @@ impl Transcriber for MockTranscriber {
 
     async fn stop(&mut self) -> Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn parses_partial_transcript_messages() {
+        let last_window = Arc::new(Mutex::new(Some((1200, 1400))));
+        let event = parse_realtime_event(
+            r#"{"message_type":"partial_transcript","text":"hello world"}"#,
+            &last_window,
+        )
+        .await;
+
+        match event {
+            Some(TranscriberEvent::PartialTranscript(transcript)) => {
+                assert_eq!(transcript.start_ms, 1200);
+                assert_eq!(transcript.end_ms, 1400);
+                assert_eq!(transcript.text, "hello world");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn parses_error_messages() {
+        let last_window = Arc::new(Mutex::new(None));
+        let event = parse_realtime_event(
+            r#"{"message_type":"scribe_rate_limited_error","message":"too many requests"}"#,
+            &last_window,
+        )
+        .await;
+
+        match event {
+            Some(TranscriberEvent::Error(message)) => {
+                assert!(message.contains("too many requests"));
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
     }
 }

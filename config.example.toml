@@ -2,7 +2,7 @@
 mode = "ManualQa"
 auto_start = true
 http_bind = "127.0.0.1:8765"
-simulate_transcriber = true
+simulate_transcriber = false
 
 [capture]
 source = "parec"
@@ -14,12 +14,12 @@ chunk_ms = 200
 
 [storage]
 database_path = "./soundmind.db"
-retention_days = 14
+retention_days = 0
 
 [providers.openai]
-enabled = false
+enabled = true
 model = "gpt-5"
 
 [providers.elevenlabs]
-enabled = false
-model = "scribe_v1"
+enabled = true
+model = "scribe_v2_realtime"
