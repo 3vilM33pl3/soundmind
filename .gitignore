@@ -3,3 +3,5 @@
 *.db
 .env
 config.toml
+text.txt
+keys.env
