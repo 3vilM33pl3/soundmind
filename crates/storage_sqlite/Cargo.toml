@@ -7,6 +7,8 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
+ipc_schema = { path = "../ipc_schema" }
+serde_json.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
 transcript_core = { path = "../transcript_core" }
