@@ -12,6 +12,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::Utc;
 use context_engine::{last_question_candidate, recent_transcript_window};
+use dotenvy::from_filename_override;
 use ipc_schema::{
     AppMode, AssistantKind, AssistantOutput, BackendStatusSnapshot, CaptureState, CloudState,
     TranscriptSegmentDto, TranscriptSnapshot, UserAction,
@@ -20,7 +21,7 @@ use llm_openai::{OpenAiConfig, OpenAiReasoner, ResponseMode, assistant_timestamp
 use policy_engine::PolicyState;
 use serde::Deserialize;
 use storage_sqlite::Storage;
-use stt_scribe::{MockTranscriber, Transcriber};
+use stt_scribe::{MockTranscriber, ScribeRealtimeConfig, ScribeRealtimeTranscriber, Transcriber};
 use tokio::sync::{RwLock, mpsc};
 use tracing::{error, info, warn};
 use transcript_core::{TranscriptSegment, TranscriptState};
@@ -83,6 +84,7 @@ async fn main() -> Result<()> {
             std::env::var("RUST_LOG").unwrap_or_else(|_| "info,app_backend=debug".to_string()),
         )
         .init();
+    let _ = from_filename_override("keys.env");
 
     let config = load_config()?;
     let database_url = sqlite_url(&config.storage.database_path);
@@ -146,8 +148,7 @@ async fn run_runtime(
         ..PolicyState::default()
     };
     let mut transcript = TranscriptState::default();
-    let mut transcriber = MockTranscriber::new();
-    transcriber.start().await?;
+    let (mut transcriber, stt_provider) = build_transcriber(&config, &snapshot).await?;
 
     let capture_config = CaptureConfig {
         frame_ms: config.capture.frame_ms,
@@ -176,8 +177,13 @@ async fn run_runtime(
     {
         let mut locked = snapshot.write().await;
         locked.session_id = Some(session_id);
-        locked.cloud_state =
-            if config.providers.openai.enabled { CloudState::SttActive } else { CloudState::Off };
+        locked.stt_provider = Some(stt_provider);
+        locked.cloud_state = if config.providers.openai.enabled || config.providers.elevenlabs.enabled
+        {
+            CloudState::SttActive
+        } else {
+            CloudState::Off
+        };
     }
 
     loop {
@@ -206,6 +212,7 @@ async fn run_runtime(
                         {
                             let mut locked = snapshot.write().await;
                             locked.current_sink = Some(device.sink_name.clone());
+                            locked.current_monitor_source = Some(device.monitor_source.clone());
                             locked.capture_state = CaptureState::Capturing;
                         }
                         storage
@@ -224,11 +231,13 @@ async fn run_runtime(
                             transcriber.push_audio(chunk).await?;
                             while let Some(event) = transcriber.try_recv_event() {
                                 match &event {
-                                    stt_scribe::TranscriberEvent::Health(_) => {
-                                        snapshot.write().await.cloud_state = CloudState::SttActive;
+                                    stt_scribe::TranscriberEvent::Health(health) => {
+                                        let mut locked = snapshot.write().await;
+                                        locked.cloud_state = CloudState::SttActive;
+                                        locked.stt_status = Some(health.message.clone());
                                     }
                                     stt_scribe::TranscriberEvent::Error(message) => {
-                                        push_error(&snapshot, message.clone()).await;
+                                        push_stt_error(&snapshot, message.clone()).await;
                                     }
                                     stt_scribe::TranscriberEvent::PartialTranscript(_) => {}
                                     stt_scribe::TranscriberEvent::FinalTranscript(_) => {}
@@ -254,9 +263,59 @@ async fn run_runtime(
         }
     }
 
+    transcriber.stop().await.ok();
     storage.end_session(session_id).await?;
     storage.append_audit_event(Some(session_id), "session_stopped").await?;
     Ok(())
+}
+
+async fn build_transcriber(
+    config: &RootConfig,
+    snapshot: &Arc<RwLock<BackendStatusSnapshot>>,
+) -> Result<(Box<dyn Transcriber>, String)> {
+    if !config.app.simulate_transcriber && config.providers.elevenlabs.enabled {
+        match std::env::var("ELEVENLABS_API_KEY") {
+            Ok(api_key) if !api_key.trim().is_empty() => {
+                let mut transcriber = ScribeRealtimeTranscriber::new(ScribeRealtimeConfig {
+                    api_key,
+                    model_id: config.providers.elevenlabs.model.clone(),
+                    sample_rate_hz: config.capture.sample_rate_hz,
+                    language_code: Some("en".to_string()),
+                    include_timestamps: true,
+                    enable_logging: true,
+                });
+
+                match transcriber.start().await {
+                    Ok(()) => {
+                        info!(model = %config.providers.elevenlabs.model, "using ElevenLabs realtime transcriber");
+                        return Ok((
+                            Box::new(transcriber),
+                            "elevenlabs_scribe_realtime".to_string(),
+                        ));
+                    }
+                    Err(error) => {
+                        warn!(?error, "failed to start ElevenLabs realtime transcriber; falling back to mock");
+                        push_stt_error(
+                            snapshot,
+                            format!("ElevenLabs startup failed; falling back to mock: {error}"),
+                        )
+                        .await;
+                    }
+                }
+            }
+            _ => {
+                push_stt_error(
+                    snapshot,
+                    "ELEVENLABS_API_KEY is missing; falling back to mock transcriber".to_string(),
+                )
+                .await;
+            }
+        }
+    }
+
+    let mut transcriber = MockTranscriber::new();
+    transcriber.start().await?;
+    Ok((Box::new(transcriber), "mock_scribe".to_string()))
 }
 
 fn spawn_capture_source(
@@ -464,6 +523,17 @@ async fn push_error(snapshot: &Arc<RwLock<BackendStatusSnapshot>>, message: Stri
     }
 }
 
+async fn push_stt_error(snapshot: &Arc<RwLock<BackendStatusSnapshot>>, message: String) {
+    let mut locked = snapshot.write().await;
+    locked.cloud_state = CloudState::Error;
+    locked.stt_status = Some(message.clone());
+    locked.recent_errors.push(message);
+    if locked.recent_errors.len() > 5 {
+        let excess = locked.recent_errors.len() - 5;
+        locked.recent_errors.drain(0..excess);
+    }
+}
+
 async fn health(State(state): State<AppState>) -> Json<BackendStatusSnapshot> {
     Json(state.snapshot.read().await.clone())
 }
@@ -499,13 +569,27 @@ fn load_config() -> Result<RootConfig> {
         }
     }
 
-    if config.providers.elevenlabs.enabled && !config.app.simulate_transcriber {
-        info!(
-            "ElevenLabs is enabled in config, but the current vertical slice still uses the mock transcriber"
-        );
+    if let Ok(api_key) = std::env::var("ELEVENLABS_API_KEY") {
+        if !api_key.trim().is_empty() {
+            config.providers.elevenlabs.enabled = true;
+            if config.app.simulate_transcriber {
+                info!(
+                    "ELEVENLABS_API_KEY is present; overriding simulate_transcriber=true to use the live provider by default"
+                );
+                config.app.simulate_transcriber = false;
+            }
+        }
     }
 
-    info!(retention_days = config.storage.retention_days, "loaded configuration");
+    info!(
+        retention_days = if config.storage.retention_days == 0 {
+            "infinite".to_string()
+        } else {
+            config.storage.retention_days.to_string()
+        },
+        simulate_transcriber = config.app.simulate_transcriber,
+        "loaded configuration"
+    );
     Ok(config)
 }
 
