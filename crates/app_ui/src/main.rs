@@ -12,6 +12,12 @@ use ipc_schema::{AppMode, BackendStatusSnapshot, UserAction};
 
 const DEFAULT_BACKEND_URL: &str = "http://127.0.0.1:8765";
 
+#[derive(Debug, Clone, Default)]
+struct BackendConnectionState {
+    connected: bool,
+    last_error: Option<String>,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let backend_url =
@@ -19,16 +25,38 @@ async fn main() -> Result<()> {
     let client = reqwest::Client::new();
     let mut terminal = TerminalGuard::enter()?;
     let mut snapshot = BackendStatusSnapshot::default();
+    let mut connection = BackendConnectionState::default();
     let mut last_refresh = Instant::now() - Duration::from_secs(10);
 
     loop {
         if last_refresh.elapsed() >= Duration::from_millis(800) {
-            if let Ok(response) = client.get(format!("{backend_url}/health")).send().await {
-                if let Ok(fetched) = response.json::<BackendStatusSnapshot>().await {
-                    snapshot = fetched;
+            match client.get(format!("{backend_url}/health")).send().await {
+                Ok(response) => match response.error_for_status() {
+                    Ok(response) => match response.json::<BackendStatusSnapshot>().await {
+                        Ok(fetched) => {
+                            snapshot = fetched;
+                            connection.connected = true;
+                            connection.last_error = None;
+                        }
+                        Err(error) => {
+                            connection.connected = false;
+                            connection.last_error =
+                                Some(format!("Failed to decode backend response: {error}"));
+                        }
+                    },
+                    Err(error) => {
+                        connection.connected = false;
+                        connection.last_error = Some(format!("Backend returned an error: {error}"));
+                    }
+                },
+                Err(error) => {
+                    connection.connected = false;
+                    connection.last_error = Some(format!(
+                        "Cannot reach backend at {backend_url}. Start it with: cargo run -p app_backend ({error})"
+                    ));
                 }
             }
-            render(&snapshot)?;
+            render(&snapshot, &connection, &backend_url)?;
             last_refresh = Instant::now();
         }
 
@@ -66,7 +94,11 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn render(snapshot: &BackendStatusSnapshot) -> Result<()> {
+fn render(
+    snapshot: &BackendStatusSnapshot,
+    connection: &BackendConnectionState,
+    backend_url: &str,
+) -> Result<()> {
     let mut out = stdout();
     execute!(out, MoveTo(0, 0), Clear(ClearType::All))?;
     writeln!(out, "Soundmind Terminal UI")?;
@@ -74,6 +106,15 @@ fn render(snapshot: &BackendStatusSnapshot) -> Result<()> {
         out,
         "q quit  space start/stop  p pause-cloud  a answer  s summary  c comment  m cycle-mode"
     )?;
+    writeln!(out, "Backend URL: {backend_url}")?;
+    writeln!(
+        out,
+        "Backend status: {}",
+        if connection.connected { "connected" } else { "disconnected" }
+    )?;
+    if let Some(error) = &connection.last_error {
+        writeln!(out, "Backend note: {error}")?;
+    }
     writeln!(out)?;
     writeln!(out, "Mode: {:?}", snapshot.mode)?;
     writeln!(out, "Capture: {:?}  Cloud: {:?}", snapshot.capture_state, snapshot.cloud_state)?;
