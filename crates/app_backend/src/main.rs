@@ -185,6 +185,8 @@ async fn run_runtime(
             CloudState::Off
         };
     }
+    drain_transcriber_events(&snapshot, &storage, session_id, &mut transcript, transcriber.as_mut())
+        .await?;
 
     loop {
         tokio::select! {
@@ -229,27 +231,14 @@ async fn run_runtime(
 
                         if let Some(chunk) = pipeline.push_frame(frame) {
                             transcriber.push_audio(chunk).await?;
-                            while let Some(event) = transcriber.try_recv_event() {
-                                match &event {
-                                    stt_scribe::TranscriberEvent::Health(health) => {
-                                        let mut locked = snapshot.write().await;
-                                        locked.cloud_state = CloudState::SttActive;
-                                        locked.stt_status = Some(health.message.clone());
-                                    }
-                                    stt_scribe::TranscriberEvent::Error(message) => {
-                                        push_stt_error(&snapshot, message.clone()).await;
-                                    }
-                                    stt_scribe::TranscriberEvent::PartialTranscript(_) => {}
-                                    stt_scribe::TranscriberEvent::FinalTranscript(_) => {}
-                                }
-
-                                if let Some(segment) = transcript.apply_event(session_id, event) {
-                                    storage.insert_transcript_segment(&segment).await?;
-                                    refresh_snapshot(&snapshot, &transcript).await;
-                                } else {
-                                    refresh_snapshot(&snapshot, &transcript).await;
-                                }
-                            }
+                            drain_transcriber_events(
+                                &snapshot,
+                                &storage,
+                                session_id,
+                                &mut transcript,
+                                transcriber.as_mut(),
+                            )
+                            .await?;
                         }
                     }
                     CaptureEvent::Error(message) => {
@@ -266,6 +255,38 @@ async fn run_runtime(
     transcriber.stop().await.ok();
     storage.end_session(session_id).await?;
     storage.append_audit_event(Some(session_id), "session_stopped").await?;
+    Ok(())
+}
+
+async fn drain_transcriber_events(
+    snapshot: &Arc<RwLock<BackendStatusSnapshot>>,
+    storage: &Storage,
+    session_id: Uuid,
+    transcript: &mut TranscriptState,
+    transcriber: &mut dyn Transcriber,
+) -> Result<()> {
+    while let Some(event) = transcriber.try_recv_event() {
+        match &event {
+            stt_scribe::TranscriberEvent::Health(health) => {
+                let mut locked = snapshot.write().await;
+                locked.cloud_state = CloudState::SttActive;
+                locked.stt_status = Some(health.message.clone());
+            }
+            stt_scribe::TranscriberEvent::Error(message) => {
+                push_stt_error(snapshot, message.clone()).await;
+            }
+            stt_scribe::TranscriberEvent::PartialTranscript(_)
+            | stt_scribe::TranscriberEvent::FinalTranscript(_) => {}
+        }
+
+        if let Some(segment) = transcript.apply_event(session_id, event) {
+            storage.insert_transcript_segment(&segment).await?;
+            refresh_snapshot(snapshot, transcript).await;
+        } else {
+            refresh_snapshot(snapshot, transcript).await;
+        }
+    }
+
     Ok(())
 }
 
