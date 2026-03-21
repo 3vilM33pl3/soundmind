@@ -17,9 +17,11 @@ const els = {
   cloudChip: document.querySelector("#cloud-chip"),
   sttChip: document.querySelector("#stt-chip"),
   backendNote: document.querySelector("#backend-note"),
+  questionBanner: document.querySelector("#question-banner"),
   partialBox: document.querySelector("#partial-box"),
   segmentList: document.querySelector("#segment-list"),
   assistantCard: document.querySelector("#assistant-card"),
+  answerQuestionButton: document.querySelector("#answer-question-button"),
   errorList: document.querySelector("#error-list"),
   settingsMode: document.querySelector("#settings-mode"),
   retentionDays: document.querySelector("#retention-days"),
@@ -147,6 +149,7 @@ function renderSnapshot(snapshot) {
     ? "Cloud processing is paused."
     : `${snapshot.cloud_state} via ${snapshot.stt_provider || "unknown provider"}.`;
   els.privacyBackend.textContent = backendUrl;
+  renderQuestionBanner(snapshot.detected_question);
 
   if (snapshot.transcript.segments.length === 0) {
     els.segmentList.innerHTML = `<div class="empty-state">No transcript segments committed yet.</div>`;
@@ -184,6 +187,26 @@ function renderSnapshot(snapshot) {
       .map((error) => `<div class="error-item">${escapeHtml(error)}</div>`)
       .join("");
   }
+}
+
+function renderQuestionBanner(question) {
+  if (!question) {
+    els.questionBanner.className = "question-banner question-banner-idle";
+    els.questionBanner.innerHTML = `
+      <div class="question-label">Question status</div>
+      <div class="question-body">No question detected right now.</div>
+    `;
+    els.answerQuestionButton.textContent = "Answer Last Question";
+    return;
+  }
+
+  els.questionBanner.className = "question-banner question-banner-detected";
+  els.questionBanner.innerHTML = `
+    <div class="question-label">Question detected</div>
+    <div class="question-body">${escapeHtml(question.text)}</div>
+    <div class="question-meta">${question.start_ms}-${question.end_ms} ms</div>
+  `;
+  els.answerQuestionButton.textContent = "Answer Detected Question";
 }
 
 function renderSettings(settings) {

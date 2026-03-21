@@ -166,7 +166,18 @@ h4 {
 
 .dashboard {
   display: grid;
-  grid-template-columns: 1.18fr 0.92fr;
+  gap: 20px;
+}
+
+.primary-stage {
+  display: grid;
+  grid-template-columns: 1.25fr 0.95fr;
+  gap: 20px;
+}
+
+.secondary-stage {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 20px;
 }
 
@@ -196,6 +207,12 @@ h4 {
 }
 
 .compact-grid {
+  margin-bottom: 18px;
+}
+
+.assistant-actions {
+  display: grid;
+  gap: 12px;
   margin-bottom: 18px;
 }
 
@@ -341,6 +358,36 @@ input[type="number"] {
   color: var(--muted);
 }
 
+.question-banner {
+  padding: 16px 18px;
+  margin-bottom: 16px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+}
+
+.question-banner-idle {
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.question-banner-detected {
+  background: linear-gradient(135deg, rgba(188, 90, 51, 0.16), rgba(45, 97, 120, 0.08));
+  border-color: rgba(188, 90, 51, 0.24);
+}
+
+.question-label,
+.question-meta {
+  font-size: 0.83rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.question-body {
+  margin-top: 10px;
+  line-height: 1.55;
+  font-size: 1.02rem;
+}
+
 .segment-list,
 .error-list,
 .session-list,
@@ -459,7 +506,8 @@ input[type="number"] {
 }
 
 @media (max-width: 1320px) {
-  .dashboard {
+  .primary-stage,
+  .secondary-stage {
     grid-template-columns: 1fr;
   }
 
