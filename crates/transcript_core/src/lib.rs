@@ -26,8 +26,9 @@ impl TranscriptState {
         event: TranscriberEvent,
     ) -> Option<TranscriptSegment> {
         match event {
-            TranscriberEvent::PartialTranscript(partial) => {
-                self.partial = Some(partial);
+            TranscriberEvent::PartialTranscript(mut partial) => {
+                partial.text = sanitize_transcript_text(&partial.text);
+                self.partial = if partial.text.is_empty() { None } else { Some(partial) };
                 None
             }
             TranscriberEvent::FinalTranscript(final_transcript) => {
@@ -64,8 +65,13 @@ impl TranscriptState {
     fn commit_final(
         &mut self,
         session_id: Uuid,
-        final_transcript: FinalTranscript,
+        mut final_transcript: FinalTranscript,
     ) -> Option<TranscriptSegment> {
+        final_transcript.text = sanitize_transcript_text(&final_transcript.text);
+        if final_transcript.text.is_empty() {
+            return None;
+        }
+
         if let Some(last) = self.committed.last() {
             if last.text == final_transcript.text {
                 return None;
@@ -93,6 +99,72 @@ fn looks_like_question(text: &str) -> bool {
         || ["who", "what", "when", "where", "why", "how", "can", "should"]
             .iter()
             .any(|prefix| trimmed.to_lowercase().starts_with(prefix))
+}
+
+fn sanitize_transcript_text(text: &str) -> String {
+    let tokens = text.split_whitespace().collect::<Vec<_>>();
+    let mut cleaned = Vec::with_capacity(tokens.len());
+    let mut index = 0;
+
+    while index < tokens.len() {
+        let token = tokens[index];
+
+        if is_timestamp_token(token) {
+            index += 1;
+            continue;
+        }
+
+        if is_timestamp_arrow(token) {
+            index += 1;
+            continue;
+        }
+
+        if is_cue_number(token) && tokens.get(index + 1).is_some_and(|next| is_timestamp_token(next))
+        {
+            index += 1;
+            continue;
+        }
+
+        cleaned.push(token);
+        index += 1;
+    }
+
+    cleaned.join(" ").trim().trim_matches('-').trim().to_string()
+}
+
+fn is_cue_number(token: &str) -> bool {
+    let normalized = token.trim_matches(|character: char| !character.is_ascii_digit());
+    !normalized.is_empty()
+        && normalized.len() <= 4
+        && normalized.chars().all(|character| character.is_ascii_digit())
+}
+
+fn is_timestamp_arrow(token: &str) -> bool {
+    matches!(token.trim(), "--" | "-->" | "->")
+}
+
+fn is_timestamp_token(token: &str) -> bool {
+    let normalized = token.trim_matches(|character: char| {
+        !character.is_ascii_alphanumeric() && character != ':' && character != ',' && character != '.'
+    });
+    let Some((hours, rest)) = normalized.split_once(':') else {
+        return false;
+    };
+    let Some((minutes, rest)) = rest.split_once(':') else {
+        return false;
+    };
+    let Some((seconds, millis)) = rest
+        .split_once(',')
+        .or_else(|| rest.split_once('.'))
+    else {
+        return false;
+    };
+
+    [hours, minutes, seconds]
+        .into_iter()
+        .all(|part| part.len() == 2 && part.chars().all(|character| character.is_ascii_digit()))
+        && millis.len() == 3
+        && millis.chars().all(|character| character.is_ascii_digit())
 }
 
 #[cfg(test)]
@@ -143,5 +215,48 @@ mod tests {
         assert!(first.is_some());
         assert!(duplicate.is_none());
         assert_eq!(state.segments().len(), 1);
+    }
+
+    #[test]
+    fn strips_subtitle_timestamp_artifacts_from_final_transcript() {
+        let session_id = Uuid::new_v4();
+        let mut state = TranscriptState::default();
+
+        let segment = state.apply_event(
+            session_id,
+            TranscriberEvent::FinalTranscript(FinalTranscript {
+                start_ms: 0,
+                end_ms: 500,
+                text: "This is obviously a shorter version 00:00:59,000 -- 00:01:01,000 for a real job interview.".to_string(),
+                source: "mock".to_string(),
+            }),
+        );
+
+        let segment = segment.expect("segment should survive cleanup");
+        assert_eq!(
+            segment.text,
+            "This is obviously a shorter version for a real job interview."
+        );
+    }
+
+    #[test]
+    fn strips_cue_numbers_and_standalone_timestamps_from_partial_transcript() {
+        let session_id = Uuid::new_v4();
+        let mut state = TranscriptState::default();
+
+        state.apply_event(
+            session_id,
+            TranscriberEvent::PartialTranscript(PartialTranscript {
+                start_ms: 0,
+                end_ms: 500,
+                text: "Your typical interview 24 00:01:03,000 -- 00:01:04,000 lasts for about".to_string(),
+                source: "mock".to_string(),
+            }),
+        );
+
+        assert_eq!(
+            state.partial_text(),
+            Some("Your typical interview lasts for about")
+        );
     }
 }
