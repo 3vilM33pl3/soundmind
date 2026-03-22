@@ -82,7 +82,7 @@ impl Default for AppSettingsDto {
 }
 
 pub fn default_assistant_instruction() -> String {
-    "You are assisting the user during a job interview. Use the live transcript plus any uploaded priming documents such as the user's CV, the job description, company notes, or project history. Summarize what the interviewer is asking, suggest concise high-quality answers tailored to the user's background, point out likely follow-up questions, and avoid inventing experience or qualifications that are not supported by the transcript or uploaded documents.".to_string()
+    "You are assisting the user during a live job interview. Use the live transcript plus any uploaded priming documents such as the user's CV, the job description, company notes, or project history. Summarize what the interviewer is asking, suggest concise high-quality answers tailored to the user's background, point out likely follow-up questions, and avoid inventing experience or qualifications that are not supported by the transcript or uploaded documents. Prefer short bullet points when they improve speed of reading. Keep advice compact, practical, and easy to scan while the user is speaking with an interviewer.".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -130,15 +130,21 @@ fn build_prompt(
         .join("\n");
 
     let instruction = match mode {
-        ResponseMode::AnswerQuestion => "Answer the last detected question clearly and briefly.",
-        ResponseMode::Commentary => "Provide one brief useful commentary line with no filler.",
-        ResponseMode::SummariseRecent => "Summarise the recent transcript in a concise paragraph.",
+        ResponseMode::AnswerQuestion => {
+            "Answer the last detected interview question in 3 to 5 short bullet points. Start with the strongest direct answer, then add supporting points, examples, or follow-up angles only if they help."
+        }
+        ResponseMode::Commentary => {
+            "Provide 1 to 3 brief bullet points with the most useful live interview guidance right now. Focus on what the user should emphasize, clarify, or avoid."
+        }
+        ResponseMode::SummariseRecent => {
+            "Summarise the recent interview exchange in 3 to 5 short bullet points. Highlight the interviewer intent, key themes, and any likely next question."
+        }
     };
 
     let priming = render_priming_documents(&context.priming_documents);
 
     format!(
-        "Primary assistant instruction:\n{}\n\nPriming documents:\n{}\n\nTask:\n{instruction}\nReturn strict JSON with mode, should_respond, answer, and confidence.\nGround your response in the transcript and uploaded documents. Do not invent credentials, experience, or facts not supported by the provided context.\nTranscript:\n{rendered}",
+        "Primary assistant instruction:\n{}\n\nPriming documents:\n{}\n\nTask:\n{instruction}\nReturn strict JSON with mode, should_respond, answer, and confidence.\nFormat answer as plain text bullets when useful, using '-' prefixes and short lines. Optimize for fast reading during a live interview. Ground your response in the transcript and uploaded documents. Do not invent credentials, experience, or facts not supported by the provided context.\nTranscript:\n{rendered}",
         context.instruction,
         priming,
     )
@@ -186,13 +192,26 @@ fn fallback_response(mode: ResponseMode, transcript: &[TranscriptSegment]) -> Ll
             .iter()
             .rev()
             .find(|segment| segment.text.contains('?'))
-            .map(|segment| format!("OpenAI is disabled; latest question was: {}", segment.text))
-            .unwrap_or_else(|| "OpenAI is disabled and no recent question was found.".to_string()),
+            .map(|segment| {
+                format!(
+                    "- OpenAI is disabled.\n- Latest question: {}\n- Use your CV and job description uploads to answer this directly.",
+                    segment.text
+                )
+            })
+            .unwrap_or_else(|| {
+                "- OpenAI is disabled.\n- No recent question was found yet.".to_string()
+            }),
         ResponseMode::Commentary => {
-            format!("OpenAI is disabled; recent transcript topic: {}", clip(&transcript_text))
+            format!(
+                "- OpenAI is disabled.\n- Recent transcript topic: {}",
+                clip(&transcript_text)
+            )
         }
         ResponseMode::SummariseRecent => {
-            format!("OpenAI is disabled; recent transcript summary: {}", clip(&transcript_text))
+            format!(
+                "- OpenAI is disabled.\n- Recent transcript summary: {}",
+                clip(&transcript_text)
+            )
         }
     };
 

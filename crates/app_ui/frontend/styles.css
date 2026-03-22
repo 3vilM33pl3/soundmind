@@ -457,6 +457,29 @@ textarea {
   line-height: 1.55;
 }
 
+.assistant-content {
+  font-size: 1rem;
+}
+
+.assistant-content p {
+  margin: 0;
+}
+
+.assistant-content p + p {
+  margin-top: 0.7rem;
+}
+
+.assistant-bullets {
+  margin: 0;
+  padding-left: 1.15rem;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.assistant-bullets li::marker {
+  color: var(--accent);
+}
+
 .mono {
   font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
 }

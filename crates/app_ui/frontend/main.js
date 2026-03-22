@@ -251,7 +251,7 @@ function renderSnapshot(snapshot) {
       <div class="assistant-meta">
         ${escapeHtml(snapshot.latest_assistant.kind)} • ${formatTime(snapshot.latest_assistant.created_at)}
       </div>
-      <div class="assistant-content">${escapeHtml(snapshot.latest_assistant.content)}</div>
+      <div class="assistant-content">${renderAssistantContent(snapshot.latest_assistant.content)}</div>
     `;
   } else {
     els.assistantCard.innerHTML = `
@@ -268,6 +268,30 @@ function renderSnapshot(snapshot) {
       .map((error) => `<div class="error-item">${escapeHtml(error)}</div>`)
       .join("");
   }
+}
+
+function renderAssistantContent(content) {
+  const lines = content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  if (!lines.length) {
+    return `<p>No assistant output yet.</p>`;
+  }
+
+  const bulletLines = lines.filter((line) => /^[*\-•]\s+/.test(line));
+  if (bulletLines.length >= 2 && bulletLines.length === lines.length) {
+    return `
+      <ul class="assistant-bullets">
+        ${bulletLines
+          .map((line) => `<li>${escapeHtml(line.replace(/^[*\-•]\s+/, ""))}</li>`)
+          .join("")}
+      </ul>
+    `;
+  }
+
+  return lines.map((line) => `<p>${escapeHtml(line)}</p>`).join("");
 }
 
 function buildTranscriptParagraphs(segments) {
