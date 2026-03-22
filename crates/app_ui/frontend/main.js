@@ -163,16 +163,23 @@ function renderSnapshot(snapshot) {
     els.segmentList.innerHTML = `<div class="empty-state">No transcript segments committed yet.</div>`;
   } else {
     const detectedQuestionId = snapshot.detected_question?.id || null;
-    els.segmentList.innerHTML = snapshot.transcript.segments
-      .slice(-36)
-      .map((segment) => {
-        const classes = ["transcript-fragment"];
-        if (segment.id === detectedQuestionId) {
-          classes.push("transcript-question");
-        }
-        return `<span class="${classes.join(" ")}" title="${escapeHtml(`${segment.start_ms}-${segment.end_ms} ms • ${segment.source}`)}">${escapeHtml(segment.text)}</span>`;
-      })
-      .join(" ");
+    const paragraphs = buildTranscriptParagraphs(snapshot.transcript.segments.slice(-40));
+    els.segmentList.innerHTML = paragraphs
+      .map(
+        (paragraph) => `
+          <p class="transcript-paragraph">
+            ${paragraph
+              .map((segment) => {
+                const classes = ["transcript-fragment"];
+                if (segment.id === detectedQuestionId) {
+                  classes.push("transcript-question");
+                }
+                return `<span class="${classes.join(" ")}">${escapeHtml(segment.text)}</span>`;
+              })
+              .join(" ")}
+          </p>`,
+      )
+      .join("");
   }
 
   if (snapshot.latest_assistant) {
@@ -196,6 +203,37 @@ function renderSnapshot(snapshot) {
       .map((error) => `<div class="error-item">${escapeHtml(error)}</div>`)
       .join("");
   }
+}
+
+function buildTranscriptParagraphs(segments) {
+  const paragraphs = [];
+  let current = [];
+
+  for (const segment of segments) {
+    if (!current.length) {
+      current.push(segment);
+      continue;
+    }
+
+    const previous = current[current.length - 1];
+    const gapMs = Math.max(0, segment.start_ms - previous.end_ms);
+    const previousEndsSentence = /[.!?]["')\]]?$/.test(previous.text.trim());
+    const shouldBreak =
+      gapMs >= 1800 || (gapMs >= 900 && previousEndsSentence) || current.length >= 6;
+
+    if (shouldBreak) {
+      paragraphs.push(current);
+      current = [segment];
+    } else {
+      current.push(segment);
+    }
+  }
+
+  if (current.length) {
+    paragraphs.push(current);
+  }
+
+  return paragraphs;
 }
 
 function renderQuestionBanner(question) {

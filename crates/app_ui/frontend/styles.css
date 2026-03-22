@@ -350,6 +350,9 @@ input[type="number"] {
   min-height: 76px;
   margin-bottom: 16px;
   color: var(--muted);
+  font-size: 1rem;
+  line-height: 1.65;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(245, 238, 226, 0.62));
 }
 
 .question-banner {
@@ -403,12 +406,21 @@ input[type="number"] {
   border-radius: 24px;
   background: rgba(255, 255, 255, 0.78);
   font-family: "Fraunces", "Iowan Old Style", Georgia, serif;
-  font-size: 1.15rem;
-  line-height: 1.75;
+  font-size: 1.18rem;
+  line-height: 1.82;
+  text-wrap: pretty;
 }
 
 .transcript-fragment {
   color: var(--ink);
+}
+
+.transcript-paragraph {
+  margin: 0;
+}
+
+.transcript-paragraph + .transcript-paragraph {
+  margin-top: 0.95rem;
 }
 
 .transcript-question {
