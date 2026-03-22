@@ -13,6 +13,39 @@
   <body>
     <div class="shell">
       <main class="dashboard">
+        <header class="topbar">
+          <div class="topbar-title">
+            <p class="eyebrow">Ubuntu System Audio Assistant</p>
+            <h1>Soundmind</h1>
+          </div>
+          <div class="topbar-panel">
+            <div class="topbar-meta">
+              <span class="version-badge" id="app-version">v0.2.0</span>
+              <label class="theme-toggle" for="theme-toggle">
+                <span class="theme-toggle-label">Light</span>
+                <input id="theme-toggle" type="checkbox" aria-label="Toggle dark theme" />
+                <span class="theme-toggle-track" aria-hidden="true">
+                  <span class="theme-toggle-thumb"></span>
+                </span>
+                <span class="theme-toggle-label">Dark</span>
+              </label>
+            </div>
+            <div class="status-grid">
+              <div class="status-chip" id="backend-chip">Backend: connecting</div>
+              <div class="status-chip" id="capture-chip">Capture: idle</div>
+              <div class="status-chip" id="cloud-chip">Cloud: off</div>
+              <div class="status-chip" id="stt-chip">STT: unknown</div>
+            </div>
+            <div class="hero-note" id="backend-note">Waiting for backend status.</div>
+            <div class="hero-actions">
+              <button data-action="Start">Start Capture</button>
+              <button data-action="Stop" class="secondary">Stop Capture</button>
+              <button data-action="PauseCloud" class="ghost">Pause Cloud</button>
+              <button data-action="ResumeCloud" class="ghost">Resume Cloud</button>
+            </div>
+          </div>
+        </header>
+
         <section class="primary-stage">
           <section class="panel primary-action-bar">
             <div class="panel-head">
@@ -62,31 +95,6 @@
             </section>
           </div>
         </section>
-
-        <header class="topbar">
-          <div class="topbar-title">
-            <p class="eyebrow">Ubuntu System Audio Assistant</p>
-            <div class="title-row">
-              <h1>Soundmind</h1>
-              <span class="version-badge" id="app-version">v0.1.0</span>
-            </div>
-          </div>
-          <div class="topbar-panel">
-            <div class="status-grid">
-              <div class="status-chip" id="backend-chip">Backend: connecting</div>
-              <div class="status-chip" id="capture-chip">Capture: idle</div>
-              <div class="status-chip" id="cloud-chip">Cloud: off</div>
-              <div class="status-chip" id="stt-chip">STT: unknown</div>
-            </div>
-            <div class="hero-note" id="backend-note">Waiting for backend status.</div>
-            <div class="hero-actions">
-              <button data-action="Start">Start Capture</button>
-              <button data-action="Stop" class="secondary">Stop Capture</button>
-              <button data-action="PauseCloud" class="ghost">Pause Cloud</button>
-              <button data-action="ResumeCloud" class="ghost">Resume Cloud</button>
-            </div>
-          </div>
-        </header>
 
         <section class="secondary-stage">
           <section class="panel panel-settings">

@@ -1,6 +1,7 @@
 const DEFAULT_BACKEND_URL = "http://127.0.0.1:8765";
 const backendUrl = window.localStorage.getItem("soundmind.backendUrl") || DEFAULT_BACKEND_URL;
 const APP_VERSION = window.SOUNDMIND_VERSION || "0.2.0";
+const THEME_STORAGE_KEY = "soundmind.theme";
 
 const state = {
   snapshot: null,
@@ -33,6 +34,7 @@ const els = {
   clearAllButton: document.querySelector("#clear-all-button"),
   selectionStatus: document.querySelector("#selection-status"),
   appVersion: document.querySelector("#app-version"),
+  themeToggle: document.querySelector("#theme-toggle"),
   errorList: document.querySelector("#error-list"),
   settingsMode: document.querySelector("#settings-mode"),
   retentionDays: document.querySelector("#retention-days"),
@@ -736,6 +738,24 @@ function formatTime(value) {
   return new Date(value).toLocaleString();
 }
 
+function preferredTheme() {
+  const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+  if (storedTheme === "light" || storedTheme === "dark") {
+    return storedTheme;
+  }
+
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function applyTheme(theme) {
+  const resolvedTheme = theme === "dark" ? "dark" : "light";
+  document.documentElement.dataset.theme = resolvedTheme;
+  if (els.themeToggle) {
+    els.themeToggle.checked = resolvedTheme === "dark";
+  }
+  window.localStorage.setItem(THEME_STORAGE_KEY, resolvedTheme);
+}
+
 function buildSettingsPayload() {
   return {
     retention_days: Math.max(0, Number.parseInt(els.retentionDays.value || "0", 10) || 0),
@@ -1034,6 +1054,10 @@ document.addEventListener("selectionchange", () => {
 });
 
 els.appVersion.textContent = `v${APP_VERSION}`;
+applyTheme(preferredTheme());
+els.themeToggle?.addEventListener("change", () => {
+  applyTheme(els.themeToggle.checked ? "dark" : "light");
+});
 els.saveSettings.addEventListener("click", async () => {
   try {
     await runWithButtonFeedback(

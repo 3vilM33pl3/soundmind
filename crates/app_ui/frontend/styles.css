@@ -15,6 +15,23 @@
   --shadow: 0 28px 72px rgba(16, 32, 43, 0.12);
 }
 
+:root[data-theme="dark"] {
+  --bg: #0d141b;
+  --bg-2: #111b25;
+  --panel: rgba(18, 28, 38, 0.88);
+  --panel-strong: rgba(24, 36, 48, 0.94);
+  --ink: #ecf1f5;
+  --muted: #a6b4bf;
+  --accent: #d67d55;
+  --accent-2: #6eb6d2;
+  --line: rgba(236, 241, 245, 0.1);
+  --line-strong: rgba(236, 241, 245, 0.18);
+  --ok: #70c593;
+  --warn: #e5b45d;
+  --error: #f08b82;
+  --shadow: 0 32px 88px rgba(0, 0, 0, 0.34);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -28,6 +45,13 @@ body {
     radial-gradient(circle at 0% 0%, rgba(188, 90, 51, 0.18), transparent 28%),
     radial-gradient(circle at 100% 0%, rgba(45, 97, 120, 0.16), transparent 24%),
     linear-gradient(180deg, var(--bg) 0%, #fbf8f1 46%, var(--bg-2) 100%);
+}
+
+:root[data-theme="dark"] body {
+  background:
+    radial-gradient(circle at 0% 0%, rgba(214, 125, 85, 0.18), transparent 28%),
+    radial-gradient(circle at 100% 0%, rgba(110, 182, 210, 0.16), transparent 24%),
+    linear-gradient(180deg, var(--bg) 0%, #0f1822 46%, var(--bg-2) 100%);
 }
 
 .shell {
@@ -47,21 +71,15 @@ body {
 
 .topbar {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
   gap: 18px;
-  align-items: center;
+  align-items: start;
   padding: 16px 18px;
   margin-bottom: 16px;
 }
 
 .topbar-title {
   min-width: 0;
-}
-
-.title-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
 }
 
 .version-badge {
@@ -75,6 +93,68 @@ body {
   font-size: 0.85rem;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+.topbar-meta {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 14px;
+}
+
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.74);
+  color: var(--muted);
+}
+
+.theme-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.theme-toggle-label {
+  font-size: 0.82rem;
+  letter-spacing: 0.03em;
+}
+
+.theme-toggle-track {
+  position: relative;
+  display: inline-flex;
+  width: 44px;
+  height: 24px;
+  padding: 3px;
+  border-radius: 999px;
+  background: rgba(16, 32, 43, 0.14);
+  transition: background-color 140ms ease;
+}
+
+.theme-toggle-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--panel-strong);
+  box-shadow: 0 3px 10px rgba(16, 32, 43, 0.16);
+  transition: transform 140ms ease;
+}
+
+.theme-toggle input:checked + .theme-toggle-track {
+  background: rgba(45, 97, 120, 0.42);
+}
+
+.theme-toggle input:checked + .theme-toggle-track .theme-toggle-thumb {
+  transform: translateX(20px);
+}
+
+.theme-toggle:focus-within {
+  outline: 3px solid rgba(45, 97, 120, 0.28);
+  outline-offset: 3px;
 }
 
 .eyebrow {
@@ -134,6 +214,27 @@ h4 {
   border: 1px solid var(--line);
   border-radius: 20px;
   background: rgba(255, 255, 255, 0.74);
+}
+
+:root[data-theme="dark"] .status-chip,
+:root[data-theme="dark"] .privacy-card,
+:root[data-theme="dark"] .detail-row,
+:root[data-theme="dark"] .session-row,
+:root[data-theme="dark"] .assistant-card,
+:root[data-theme="dark"] .partial-box,
+:root[data-theme="dark"] .error-item,
+:root[data-theme="dark"] .settings-note,
+:root[data-theme="dark"] .theme-toggle,
+:root[data-theme="dark"] .version-badge,
+:root[data-theme="dark"] .toggle,
+:root[data-theme="dark"] .upload-card,
+:root[data-theme="dark"] .document-card,
+:root[data-theme="dark"] .selection-status,
+:root[data-theme="dark"] .question-banner-idle,
+:root[data-theme="dark"] .transcript-flow,
+:root[data-theme="dark"] .detail-stats div,
+:root[data-theme="dark"] .empty-state {
+  background: rgba(24, 36, 48, 0.82);
 }
 
 .status-chip {
@@ -340,6 +441,10 @@ button.ghost {
   box-shadow: none;
 }
 
+:root[data-theme="dark"] button.ghost {
+  background: rgba(236, 241, 245, 0.08);
+}
+
 button.ghost.is-pending {
   box-shadow: inset 0 0 0 1px rgba(16, 32, 43, 0.12);
 }
@@ -379,6 +484,13 @@ textarea {
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.88);
   color: var(--ink);
+}
+
+:root[data-theme="dark"] select,
+:root[data-theme="dark"] input[type="number"],
+:root[data-theme="dark"] input[type="file"],
+:root[data-theme="dark"] textarea {
+  background: rgba(14, 21, 29, 0.94);
 }
 
 textarea {
@@ -771,6 +883,11 @@ textarea {
 @media (max-width: 980px) {
   .topbar {
     grid-template-columns: 1fr;
+  }
+
+  .topbar-meta {
+    justify-content: flex-start;
+    flex-wrap: wrap;
   }
 
   .privacy-grid,
