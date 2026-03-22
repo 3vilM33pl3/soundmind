@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROJECT="${1:-${MEMORY_LAYER_PROJECT:-$(basename "$PWD")}}"
-MEMCTL_BIN="${MEMCTL_BIN:-cargo run --quiet --bin mem-cli --}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./resolve-memctl.sh
+source "$SCRIPT_DIR/resolve-memctl.sh"
 
-exec bash -lc "$MEMCTL_BIN curate --project \"$PROJECT\""
+PROJECT="${1:-${MEMORY_LAYER_PROJECT:-$(basename "$PWD")}}"
+resolve_memctl_cmd
+
+exec "${MEMCTL_CMD[@]}" curate --project "$PROJECT"

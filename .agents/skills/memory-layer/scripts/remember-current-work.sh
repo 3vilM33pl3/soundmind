@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ -n "${MEMCTL_BIN:-}" ]]; then
-  read -r -a MEMCTL_CMD <<< "$MEMCTL_BIN"
-else
-  MEMCTL_CMD=(cargo run --quiet --bin mem-cli --)
-fi
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./resolve-memctl.sh
+source "$SCRIPT_DIR/resolve-memctl.sh"
+resolve_memctl_cmd
 
 exec "${MEMCTL_CMD[@]}" remember "$@"
