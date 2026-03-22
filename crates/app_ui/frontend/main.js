@@ -102,6 +102,47 @@ async function exportSession(sessionId, format) {
   return response.text();
 }
 
+function setButtonVisualState(button, state, label = null) {
+  if (!button) {
+    return;
+  }
+
+  if (!button.dataset.defaultLabel) {
+    button.dataset.defaultLabel = button.textContent.trim();
+  }
+
+  button.classList.remove("is-pending", "is-success", "is-error");
+  if (state) {
+    button.classList.add(`is-${state}`);
+  }
+
+  button.disabled = state === "pending";
+  button.textContent = label || button.dataset.defaultLabel;
+}
+
+async function runWithButtonFeedback(button, task, labels = {}) {
+  const pendingLabel = labels.pending || "Working...";
+  const successLabel = labels.success || "Done";
+  const errorLabel = labels.error || "Failed";
+
+  setButtonVisualState(button, "pending", pendingLabel);
+
+  try {
+    const result = await task();
+    if (result === false) {
+      setButtonVisualState(button, null);
+      return result;
+    }
+    setButtonVisualState(button, "success", successLabel);
+    window.setTimeout(() => setButtonVisualState(button, null), 900);
+    return result;
+  } catch (error) {
+    setButtonVisualState(button, "error", errorLabel);
+    window.setTimeout(() => setButtonVisualState(button, null), 1400);
+    throw error;
+  }
+}
+
 function setChip(el, label, status) {
   el.textContent = label;
   el.classList.remove("ok", "warn", "error");
@@ -373,12 +414,31 @@ function renderSessionDetail() {
   `;
 
   document.querySelector("#export-json")?.addEventListener("click", async () => {
-    await handleExport(session.session.id, "json");
+    const button = document.querySelector("#export-json");
+    try {
+      await runWithButtonFeedback(
+        button,
+        () => handleExport(session.session.id, "json"),
+        { pending: "Exporting...", success: "JSON Ready", error: "Export Failed" },
+      );
+    } catch (error) {
+      renderDisconnected(error);
+    }
   });
   document.querySelector("#export-markdown")?.addEventListener("click", async () => {
-    await handleExport(session.session.id, "markdown");
+    const button = document.querySelector("#export-markdown");
+    try {
+      await runWithButtonFeedback(
+        button,
+        () => handleExport(session.session.id, "markdown"),
+        { pending: "Exporting...", success: "Markdown Ready", error: "Export Failed" },
+      );
+    } catch (error) {
+      renderDisconnected(error);
+    }
   });
   document.querySelector("#delete-session")?.addEventListener("click", async () => {
+    const button = document.querySelector("#delete-session");
     const confirmed = window.confirm(
       "Delete this stored session, including transcript, assistant output, and audit events?",
     );
@@ -386,11 +446,17 @@ function renderSessionDetail() {
       return;
     }
     try {
-      await deleteSession(session.session.id);
-      state.selectedSessionId = null;
-      state.selectedSession = null;
-      await refreshHistory(true);
-      els.settingsNote.textContent = "Session deleted.";
+      await runWithButtonFeedback(
+        button,
+        async () => {
+          await deleteSession(session.session.id);
+          state.selectedSessionId = null;
+          state.selectedSession = null;
+          await refreshHistory(true);
+          els.settingsNote.textContent = "Session deleted.";
+        },
+        { pending: "Deleting...", success: "Deleted", error: "Delete Failed" },
+      );
     } catch (error) {
       renderDisconnected(error);
     }
@@ -492,6 +558,27 @@ async function handleExport(sessionId, format) {
   }
 }
 
+function actionLabels(action) {
+  switch (action) {
+    case "Start":
+      return { pending: "Starting...", success: "Capture On", error: "Start Failed" };
+    case "Stop":
+      return { pending: "Stopping...", success: "Capture Off", error: "Stop Failed" };
+    case "PauseCloud":
+      return { pending: "Pausing...", success: "Cloud Paused", error: "Pause Failed" };
+    case "ResumeCloud":
+      return { pending: "Resuming...", success: "Cloud Live", error: "Resume Failed" };
+    case "AnswerLastQuestion":
+      return { pending: "Answering...", success: "Answer Ready", error: "Answer Failed" };
+    case "SummariseLastMinute":
+      return { pending: "Summarising...", success: "Summary Ready", error: "Summary Failed" };
+    case "CommentCurrentTopic":
+      return { pending: "Commenting...", success: "Comment Ready", error: "Comment Failed" };
+    default:
+      return { pending: "Working...", success: "Done", error: "Failed" };
+  }
+}
+
 async function handleSettingsSave() {
   const previousSettings = state.settings;
   const nextSettings = buildSettingsPayload();
@@ -518,21 +605,23 @@ async function handlePurge() {
   if (retentionDays === 0) {
     els.settingsNote.textContent =
       "Retention is set to 0, so purge will not delete anything automatically.";
-    return;
+    return false;
   }
   const confirmed = window.confirm(
     `Delete stored sessions older than ${retentionDays} days? This does not affect the running session.`,
   );
   if (!confirmed) {
-    return;
+    return false;
   }
 
   try {
     const result = await purgeHistory();
     await refreshHistory(true);
     els.settingsNote.textContent = `Purged ${result.deleted} stale sessions.`;
+    return true;
   } catch (error) {
     renderDisconnected(error);
+    throw error;
   }
 }
 
@@ -542,17 +631,44 @@ document.querySelectorAll("[data-action]").forEach((button, index) => {
   }
   button.addEventListener("click", async () => {
     try {
-      await sendAction(button.dataset.action);
-      const snapshot = await fetchHealth();
-      renderSnapshot(snapshot);
+      await runWithButtonFeedback(
+        button,
+        async () => {
+          await sendAction(button.dataset.action);
+          const snapshot = await fetchHealth();
+          renderSnapshot(snapshot);
+        },
+        actionLabels(button.dataset.action),
+      );
     } catch (error) {
       renderDisconnected(error);
     }
   });
 });
 
-els.saveSettings.addEventListener("click", handleSettingsSave);
-els.purgeHistory.addEventListener("click", handlePurge);
+els.saveSettings.addEventListener("click", async () => {
+  try {
+    await runWithButtonFeedback(
+      els.saveSettings,
+      () => handleSettingsSave(),
+      { pending: "Saving...", success: "Saved", error: "Save Failed" },
+    );
+  } catch (error) {
+    renderDisconnected(error);
+  }
+});
+
+els.purgeHistory.addEventListener("click", async () => {
+  try {
+    await runWithButtonFeedback(
+      els.purgeHistory,
+      () => handlePurge(),
+      { pending: "Purging...", success: "Purged", error: "Purge Failed" },
+    );
+  } catch (error) {
+    renderDisconnected(error);
+  }
+});
 
 async function refreshLoop() {
   try {
