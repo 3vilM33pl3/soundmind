@@ -5,7 +5,7 @@ current output monitor, transcribes speech in near real time, detects likely
 questions, and lets you generate answers, summaries, and commentary while
 keeping session history and agent setup locally in SQLite.
 
-Current release: `v0.2.0`
+Current release: `v0.2.1`
 
 ![Soundmind desktop UI](docs/assets/app-screenshot.png)
 
@@ -30,7 +30,7 @@ Current release: `v0.2.0`
 Download the latest `soundmind_*_amd64.deb` from GitHub Releases, then:
 
 ```bash
-sudo apt install ./soundmind_0.2.0_amd64.deb
+sudo apt install ./soundmind_0.2.1_amd64.deb
 soundmind-setup-user
 soundmind
 ```

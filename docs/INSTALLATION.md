@@ -15,7 +15,7 @@
 2. Install it:
 
 ```bash
-sudo apt install ./soundmind_0.2.0_amd64.deb
+sudo apt install ./soundmind_0.2.1_amd64.deb
 ```
 
 3. Prepare your user config and service:
