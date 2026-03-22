@@ -110,7 +110,6 @@ h4 {
 .session-row,
 .assistant-card,
 .partial-box,
-.segment,
 .error-item,
 .settings-note {
   border: 1px solid var(--line);
@@ -318,10 +317,10 @@ input[type="number"] {
 }
 
 .privacy-value,
-.segment-text,
 .assistant-content,
 .session-row-body,
-.detail-list {
+.detail-list,
+.segment-text {
   margin-top: 10px;
   line-height: 1.55;
 }
@@ -383,7 +382,7 @@ input[type="number"] {
   font-size: 1.02rem;
 }
 
-.segment-list,
+.transcript-flow,
 .error-list,
 .session-list,
 .detail-list {
@@ -391,11 +390,32 @@ input[type="number"] {
   gap: 12px;
 }
 
-.segment,
 .detail-row,
 .assistant-card,
 .error-item {
   padding: 16px 18px;
+}
+
+.transcript-flow {
+  display: block;
+  padding: 20px 22px;
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.78);
+  font-family: "Fraunces", "Iowan Old Style", Georgia, serif;
+  font-size: 1.15rem;
+  line-height: 1.75;
+}
+
+.transcript-fragment {
+  color: var(--ink);
+}
+
+.transcript-question {
+  padding: 0.08em 0.42em 0.12em;
+  border-radius: 999px;
+  background: rgba(188, 90, 51, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(188, 90, 51, 0.16);
 }
 
 .history-layout {

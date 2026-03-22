@@ -162,16 +162,17 @@ function renderSnapshot(snapshot) {
   if (snapshot.transcript.segments.length === 0) {
     els.segmentList.innerHTML = `<div class="empty-state">No transcript segments committed yet.</div>`;
   } else {
+    const detectedQuestionId = snapshot.detected_question?.id || null;
     els.segmentList.innerHTML = snapshot.transcript.segments
-      .slice(-14)
-      .map(
-        (segment) => `
-          <article class="segment">
-            <div class="segment-meta">${escapeHtml(segment.source)} • ${segment.start_ms}-${segment.end_ms} ms</div>
-            <div class="segment-text">${escapeHtml(segment.text)}</div>
-          </article>`,
-      )
-      .join("");
+      .slice(-36)
+      .map((segment) => {
+        const classes = ["transcript-fragment"];
+        if (segment.id === detectedQuestionId) {
+          classes.push("transcript-question");
+        }
+        return `<span class="${classes.join(" ")}" title="${escapeHtml(`${segment.start_ms}-${segment.end_ms} ms • ${segment.source}`)}">${escapeHtml(segment.text)}</span>`;
+      })
+      .join(" ");
   }
 
   if (snapshot.latest_assistant) {
