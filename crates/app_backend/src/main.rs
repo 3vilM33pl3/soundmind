@@ -329,7 +329,7 @@ async fn run_runtime(
         locked.cloud_pause = !runtime_settings.auto_start_cloud;
     }
     sync_upload_state(&snapshot, &upload_gate).await;
-    drain_transcriber_events(
+    let _ = drain_transcriber_events(
         &snapshot,
         &storage,
         &settings,
@@ -405,7 +405,7 @@ async fn run_runtime(
 
                             if should_send {
                                 transcriber.push_audio(chunk).await?;
-                                drain_transcriber_events(
+                                let committed_segment = drain_transcriber_events(
                                     &snapshot,
                                     &storage,
                                     &settings,
@@ -414,6 +414,20 @@ async fn run_runtime(
                                     transcriber.as_mut(),
                                 )
                                 .await?;
+
+                                if let Some(committed_segment) = committed_segment {
+                                    maybe_auto_generate_assistant(
+                                        &committed_segment,
+                                        session_id,
+                                        &snapshot,
+                                        &storage,
+                                        &settings,
+                                        &openai,
+                                        &mut transcript,
+                                        &mut policy,
+                                    )
+                                    .await?;
+                                }
                             }
                         }
                     }
@@ -447,7 +461,9 @@ async fn drain_transcriber_events(
     session_id: Uuid,
     transcript: &mut TranscriptState,
     transcriber: &mut dyn Transcriber,
-) -> Result<()> {
+) -> Result<Option<TranscriptSegment>> {
+    let mut latest_committed_segment = None;
+
     while let Some(event) = transcriber.try_recv_event() {
         match &event {
             stt_scribe::TranscriberEvent::Health(_) => {
@@ -467,12 +483,13 @@ async fn drain_transcriber_events(
                 storage.insert_transcript_segment(&segment).await?;
             }
             refresh_snapshot(snapshot, transcript).await;
+            latest_committed_segment = Some(segment);
         } else {
             refresh_snapshot(snapshot, transcript).await;
         }
     }
 
-    Ok(())
+    Ok(latest_committed_segment)
 }
 
 async fn build_transcriber(
@@ -550,7 +567,7 @@ fn spawn_capture_source(
             warn!(?error, "capture source stopped");
             let mut locked = snapshot.write().await;
             locked.capture_state = CaptureState::Error;
-            locked.recent_errors.push(error.to_string());
+            append_recent_error(&mut locked.recent_errors, error.to_string());
         }
     });
 }
@@ -600,7 +617,7 @@ async fn handle_action(
             let last_question = last_question_candidate(transcript)
                 .map(|segment| vec![segment])
                 .unwrap_or_else(|| recent_transcript_window(transcript, 60));
-            maybe_generate_response(
+            let generated = maybe_generate_response(
                 ResponseMode::AnswerQuestion,
                 "answer",
                 last_question,
@@ -610,11 +627,15 @@ async fn handle_action(
                 settings,
                 openai,
                 policy,
+                true,
             )
             .await?;
+            if generated {
+                policy.mark_response_sent(Utc::now());
+            }
         }
         UserAction::SummariseLastMinute => {
-            maybe_generate_response(
+            let generated = maybe_generate_response(
                 ResponseMode::SummariseRecent,
                 "summary",
                 recent_transcript_window(transcript, 60),
@@ -624,11 +645,15 @@ async fn handle_action(
                 settings,
                 openai,
                 policy,
+                true,
             )
             .await?;
+            if generated {
+                policy.mark_response_sent(Utc::now());
+            }
         }
         UserAction::CommentCurrentTopic => {
-            maybe_generate_response(
+            let generated = maybe_generate_response(
                 ResponseMode::Commentary,
                 "commentary",
                 transcript.last_n_segments(6),
@@ -638,8 +663,12 @@ async fn handle_action(
                 settings,
                 openai,
                 policy,
+                true,
             )
             .await?;
+            if generated {
+                policy.mark_response_sent(Utc::now());
+            }
         }
     }
 
@@ -658,40 +687,65 @@ async fn maybe_generate_response(
     settings: &Arc<RwLock<AppSettingsDto>>,
     openai: &OpenAiReasoner,
     policy: &mut PolicyState,
-) -> Result<()> {
+    manual_trigger: bool,
+) -> Result<bool> {
     if window.is_empty() {
-        let notice = AssistantOutput {
-            kind: AssistantKind::Notice,
-            content: "No recent transcript is available yet.".to_string(),
-            confidence: Some(1.0),
-            created_at: assistant_timestamp(),
-        };
-        snapshot.write().await.latest_assistant = Some(notice);
-        return Ok(());
+        if manual_trigger {
+            let notice = AssistantOutput {
+                kind: AssistantKind::Notice,
+                content: "No recent transcript is available yet.".to_string(),
+                confidence: Some(1.0),
+                created_at: assistant_timestamp(),
+            };
+            snapshot.write().await.latest_assistant = Some(notice);
+        }
+        return Ok(false);
     }
 
-    if !policy.can_generate_response(Utc::now()) {
-        let notice = AssistantOutput {
-            kind: AssistantKind::Notice,
-            content: "Response suppressed by policy cooldown or cloud pause.".to_string(),
-            confidence: Some(1.0),
-            created_at: assistant_timestamp(),
-        };
-        snapshot.write().await.latest_assistant = Some(notice);
-        return Ok(());
+    if manual_trigger {
+        if !policy.can_generate_manual_response() {
+            let notice = AssistantOutput {
+                kind: AssistantKind::Notice,
+                content: "Cloud processing is paused. Resume cloud processing to generate assistant output.".to_string(),
+                confidence: Some(1.0),
+                created_at: assistant_timestamp(),
+            };
+            snapshot.write().await.latest_assistant = Some(notice);
+            return Ok(false);
+        }
+    } else if !policy.can_generate_automatic_response(Utc::now()) {
+        return Ok(false);
     }
 
     snapshot.write().await.cloud_state = CloudState::LlmActive;
     let assistant_context = build_assistant_context(settings, storage).await?;
     let response = openai.respond(mode, &window, &assistant_context).await?;
-    policy.mark_response_sent(Utc::now());
+
+    if !response.should_respond {
+        if manual_trigger {
+            let notice = AssistantOutput {
+                kind: AssistantKind::Notice,
+                content: if response.answer.trim().is_empty() {
+                    "No useful assistant response is available yet.".to_string()
+                } else {
+                    response.answer.clone()
+                },
+                confidence: Some(response.confidence),
+                created_at: assistant_timestamp(),
+            };
+            let mut locked = snapshot.write().await;
+            locked.latest_assistant = Some(notice);
+            locked.cloud_state = effective_cloud_state(&locked);
+        }
+        return Ok(false);
+    }
 
     let assistant = AssistantOutput {
         kind: match kind {
             "answer" => AssistantKind::Answer,
             "summary" => AssistantKind::Summary,
             "commentary" => AssistantKind::Commentary,
-            _ => AssistantKind::Notice,
+            _ => AssistantKind::Answer,
         },
         content: response.answer.clone(),
         confidence: Some(response.confidence),
@@ -705,6 +759,66 @@ async fn maybe_generate_response(
     }
 
     storage.insert_assistant_event(session_id, kind, &response.answer, response.confidence).await?;
+
+    Ok(true)
+}
+
+async fn maybe_auto_generate_assistant(
+    committed_segment: &TranscriptSegment,
+    session_id: Uuid,
+    snapshot: &Arc<RwLock<BackendStatusSnapshot>>,
+    storage: &Storage,
+    settings: &Arc<RwLock<AppSettingsDto>>,
+    openai: &OpenAiReasoner,
+    transcript: &mut TranscriptState,
+    policy: &mut PolicyState,
+) -> Result<()> {
+    let now = Utc::now();
+
+    if let Some(question) = transcript.last_question_candidate() {
+        if question.id == committed_segment.id && policy.should_auto_answer_question(question.id, now)
+        {
+            let generated = maybe_generate_response(
+                ResponseMode::AnswerQuestion,
+                "answer",
+                vec![question.clone()],
+                session_id,
+                snapshot,
+                storage,
+                settings,
+                openai,
+                policy,
+                false,
+            )
+            .await?;
+
+            if generated {
+                policy.mark_auto_question_answered(question.id, now);
+            }
+            return Ok(());
+        }
+    }
+
+    let recent_window = recent_transcript_window(transcript, 60);
+    if recent_window.len() >= 3 && policy.should_auto_summarise(committed_segment.id, now) {
+        let generated = maybe_generate_response(
+            ResponseMode::SummariseRecent,
+            "summary",
+            recent_window,
+            session_id,
+            snapshot,
+            storage,
+            settings,
+            openai,
+            policy,
+            false,
+        )
+        .await?;
+
+        if generated {
+            policy.mark_auto_summary_sent(committed_segment.id, now);
+        }
+    }
 
     Ok(())
 }
@@ -762,11 +876,7 @@ fn to_dto(segment: TranscriptSegment) -> TranscriptSegmentDto {
 async fn push_error(snapshot: &Arc<RwLock<BackendStatusSnapshot>>, message: String) {
     let mut locked = snapshot.write().await;
     locked.capture_state = CaptureState::Error;
-    locked.recent_errors.push(message);
-    if locked.recent_errors.len() > 5 {
-        let excess = locked.recent_errors.len() - 5;
-        locked.recent_errors.drain(0..excess);
-    }
+    append_recent_error(&mut locked.recent_errors, message);
 }
 
 async fn push_stt_error(snapshot: &Arc<RwLock<BackendStatusSnapshot>>, message: String) {
@@ -774,12 +884,11 @@ async fn push_stt_error(snapshot: &Arc<RwLock<BackendStatusSnapshot>>, message: 
     locked.cloud_state = CloudState::Error;
     locked.audio_upload_active = false;
     locked.cloud_auto_pause = false;
-    locked.stt_status = Some(message.clone());
-    locked.recent_errors.push(message);
-    if locked.recent_errors.len() > 5 {
-        let excess = locked.recent_errors.len() - 5;
-        locked.recent_errors.drain(0..excess);
+    let trimmed = message.trim();
+    if !trimmed.is_empty() {
+        locked.stt_status = Some(trimmed.to_string());
     }
+    append_recent_error(&mut locked.recent_errors, message);
 }
 
 async fn push_recovering(snapshot: &Arc<RwLock<BackendStatusSnapshot>>, message: String) {
@@ -787,10 +896,19 @@ async fn push_recovering(snapshot: &Arc<RwLock<BackendStatusSnapshot>>, message:
     if locked.capture_state == CaptureState::Error {
         locked.capture_state = CaptureState::Capturing;
     }
-    locked.recent_errors.push(message);
-    if locked.recent_errors.len() > 5 {
-        let excess = locked.recent_errors.len() - 5;
-        locked.recent_errors.drain(0..excess);
+    append_recent_error(&mut locked.recent_errors, message);
+}
+
+fn append_recent_error(recent_errors: &mut Vec<String>, message: String) {
+    let trimmed = message.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+
+    recent_errors.push(trimmed.to_string());
+    if recent_errors.len() > 5 {
+        let excess = recent_errors.len() - 5;
+        recent_errors.drain(0..excess);
     }
 }
 
@@ -840,7 +958,9 @@ fn effective_stt_status(snapshot: &BackendStatusSnapshot) -> String {
 }
 
 async fn health(State(state): State<AppState>) -> Json<BackendStatusSnapshot> {
-    Json(state.snapshot.read().await.clone())
+    let mut snapshot = state.snapshot.read().await.clone();
+    snapshot.recent_errors.retain(|error| !error.trim().is_empty());
+    Json(snapshot)
 }
 
 async fn post_action(

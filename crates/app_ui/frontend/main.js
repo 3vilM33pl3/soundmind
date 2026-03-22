@@ -260,10 +260,11 @@ function renderSnapshot(snapshot) {
     `;
   }
 
-  if (!snapshot.recent_errors.length) {
+  const recentErrors = snapshot.recent_errors.filter((error) => error.trim().length > 0);
+  if (!recentErrors.length) {
     els.errorList.innerHTML = `<div class="empty-state">No recent backend errors.</div>`;
   } else {
-    els.errorList.innerHTML = snapshot.recent_errors
+    els.errorList.innerHTML = recentErrors
       .map((error) => `<div class="error-item">${escapeHtml(error)}</div>`)
       .join("");
   }
