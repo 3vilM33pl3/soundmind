@@ -324,13 +324,21 @@ button.ghost.is-pending {
 }
 
 select,
-input[type="number"] {
+input[type="number"],
+input[type="file"],
+textarea {
   width: 100%;
   padding: 12px 14px;
   border: 1px solid var(--line-strong);
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.88);
   color: var(--ink);
+}
+
+textarea {
+  min-height: 220px;
+  resize: vertical;
+  line-height: 1.55;
 }
 
 .toggle {
@@ -352,6 +360,69 @@ input[type="number"] {
   display: flex;
   gap: 12px;
   margin-top: 16px;
+}
+
+.panel-agent-config {
+  overflow: hidden;
+}
+
+.agent-config-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+  gap: 20px;
+}
+
+.agent-config-block {
+  display: grid;
+  gap: 16px;
+  align-content: start;
+}
+
+.section-label {
+  font-size: 0.83rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--accent-2);
+}
+
+.upload-card,
+.document-card {
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.upload-card {
+  padding: 16px 18px;
+}
+
+.document-list {
+  display: grid;
+  gap: 12px;
+}
+
+.document-card {
+  padding: 16px 18px;
+}
+
+.document-card-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: start;
+}
+
+.document-meta {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 0.85rem;
+  letter-spacing: 0.03em;
+}
+
+.document-preview {
+  margin-top: 14px;
+  line-height: 1.58;
+  color: var(--ink);
 }
 
 .privacy-grid {
@@ -595,7 +666,8 @@ input[type="number"] {
 
 @media (max-width: 1040px) {
   .primary-stage,
-  .secondary-stage {
+  .secondary-stage,
+  .agent-config-layout {
     grid-template-columns: 1fr;
   }
 
@@ -642,7 +714,8 @@ input[type="number"] {
   .settings-actions,
   .detail-actions,
   .session-row-top,
-  .session-row-meta {
+  .session-row-meta,
+  .document-card-top {
     flex-direction: column;
   }
 }

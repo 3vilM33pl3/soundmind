@@ -4,10 +4,12 @@ const backendUrl = window.localStorage.getItem("soundmind.backendUrl") || DEFAUL
 const state = {
   snapshot: null,
   settings: null,
+  primingDocuments: [],
   sessions: [],
   selectedSessionId: null,
   selectedSession: null,
   lastSettingsRefreshAt: 0,
+  lastPrimingRefreshAt: 0,
   lastHistoryRefreshAt: 0,
 };
 
@@ -27,8 +29,13 @@ const els = {
   retentionDays: document.querySelector("#retention-days"),
   transcriptStorage: document.querySelector("#transcript-storage"),
   autoStartCloud: document.querySelector("#auto-start-cloud"),
+  assistantInstruction: document.querySelector("#assistant-instruction"),
   saveSettings: document.querySelector("#save-settings"),
+  saveAgentConfig: document.querySelector("#save-agent-config"),
   purgeHistory: document.querySelector("#purge-history"),
+  primingFileInput: document.querySelector("#priming-file-input"),
+  uploadPrimingDocuments: document.querySelector("#upload-priming-documents"),
+  primingDocumentList: document.querySelector("#priming-document-list"),
   settingsNote: document.querySelector("#settings-note"),
   currentSink: document.querySelector("#current-sink"),
   monitorSource: document.querySelector("#monitor-source"),
@@ -66,6 +73,10 @@ async function fetchSessions() {
   return fetchJson("/sessions");
 }
 
+async function fetchPrimingDocuments() {
+  return fetchJson("/priming-documents");
+}
+
 async function fetchSessionDetail(sessionId) {
   return fetchJson(`/sessions/${sessionId}`);
 }
@@ -84,6 +95,18 @@ async function putSettings(settings) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(settings),
   });
+}
+
+async function uploadPrimingDocument(document) {
+  return fetchJson("/priming-documents", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(document),
+  });
+}
+
+async function deletePrimingDocument(documentId) {
+  return fetchJson(`/priming-documents/${documentId}`, { method: "DELETE" });
 }
 
 async function purgeHistory() {
@@ -303,6 +326,7 @@ function renderSettings(settings) {
   els.retentionDays.value = String(settings.retention_days);
   els.transcriptStorage.checked = settings.transcript_storage_enabled;
   els.autoStartCloud.checked = settings.auto_start_cloud;
+  els.assistantInstruction.value = settings.assistant_instruction;
   els.privacyStorage.textContent = settings.transcript_storage_enabled
     ? settings.retention_days === 0
       ? "Transcripts are stored locally with no automatic expiry."
@@ -310,6 +334,58 @@ function renderSettings(settings) {
     : "Transcript storage is disabled for new segments.";
   els.settingsNote.textContent =
     "Settings loaded from the local SQLite store. Automatic cloud resume is off by default.";
+}
+
+function renderPrimingDocuments() {
+  if (!state.primingDocuments.length) {
+    els.primingDocumentList.innerHTML =
+      `<div class="empty-state">No priming documents uploaded yet.</div>`;
+    return;
+  }
+
+  els.primingDocumentList.innerHTML = state.primingDocuments
+    .map(
+      (document) => `
+        <article class="document-card">
+          <div class="document-card-top">
+            <div>
+              <h4>${escapeHtml(document.file_name)}</h4>
+              <div class="document-meta">${escapeHtml(document.mime_type)} • ${document.char_count} characters</div>
+            </div>
+            <button class="ghost" data-document-delete="${document.id}">Delete</button>
+          </div>
+          <div class="document-preview">${escapeHtml(document.preview_text || "No extracted text preview available.")}</div>
+        </article>`,
+    )
+    .join("");
+
+  document.querySelectorAll("[data-document-delete]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const { documentDelete } = button.dataset;
+      if (!documentDelete) {
+        return;
+      }
+
+      const confirmed = window.confirm("Delete this priming document?");
+      if (!confirmed) {
+        return;
+      }
+
+      try {
+        await runWithButtonFeedback(
+          button,
+          async () => {
+            await deletePrimingDocument(documentDelete);
+            await refreshPrimingDocuments(true);
+            els.settingsNote.textContent = "Priming document deleted.";
+          },
+          { pending: "Deleting...", success: "Deleted", error: "Delete Failed" },
+        );
+      } catch (error) {
+        renderDisconnected(error);
+      }
+    });
+  });
 }
 
 function renderSessions() {
@@ -489,6 +565,7 @@ function buildSettingsPayload() {
     transcript_storage_enabled: els.transcriptStorage.checked,
     auto_start_cloud: els.autoStartCloud.checked,
     default_mode: els.settingsMode.value,
+    assistant_instruction: els.assistantInstruction.value.trim(),
   };
 }
 
@@ -538,6 +615,36 @@ async function refreshSettings(force = false) {
   if (!state.settings || JSON.stringify(state.settings) !== JSON.stringify(settings)) {
     renderSettings(settings);
   }
+}
+
+async function refreshPrimingDocuments(force = false) {
+  const now = Date.now();
+  if (!force && now - state.lastPrimingRefreshAt < 12000) {
+    return;
+  }
+
+  state.primingDocuments = await fetchPrimingDocuments();
+  state.lastPrimingRefreshAt = now;
+  renderPrimingDocuments();
+}
+
+async function fileToUploadPayload(file) {
+  const buffer = await file.arrayBuffer();
+  return {
+    file_name: file.name,
+    mime_type: file.type || null,
+    content_base64: arrayBufferToBase64(buffer),
+  };
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return window.btoa(binary);
 }
 
 async function handleExport(sessionId, format) {
@@ -625,6 +732,24 @@ async function handlePurge() {
   }
 }
 
+async function handlePrimingUpload() {
+  const files = Array.from(els.primingFileInput.files || []);
+  if (!files.length) {
+    els.settingsNote.textContent = "Choose one or more documents to upload first.";
+    return false;
+  }
+
+  for (const file of files) {
+    const payload = await fileToUploadPayload(file);
+    await uploadPrimingDocument(payload);
+  }
+
+  els.primingFileInput.value = "";
+  await refreshPrimingDocuments(true);
+  els.settingsNote.textContent = `Uploaded ${files.length} priming document${files.length === 1 ? "" : "s"}.`;
+  return true;
+}
+
 document.querySelectorAll("[data-action]").forEach((button, index) => {
   if (index >= 2) {
     button.classList.add("secondary");
@@ -658,6 +783,18 @@ els.saveSettings.addEventListener("click", async () => {
   }
 });
 
+els.saveAgentConfig.addEventListener("click", async () => {
+  try {
+    await runWithButtonFeedback(
+      els.saveAgentConfig,
+      () => handleSettingsSave(),
+      { pending: "Saving...", success: "Saved", error: "Save Failed" },
+    );
+  } catch (error) {
+    renderDisconnected(error);
+  }
+});
+
 els.purgeHistory.addEventListener("click", async () => {
   try {
     await runWithButtonFeedback(
@@ -670,11 +807,26 @@ els.purgeHistory.addEventListener("click", async () => {
   }
 });
 
+els.uploadPrimingDocuments.addEventListener("click", async () => {
+  try {
+    await runWithButtonFeedback(
+      els.uploadPrimingDocuments,
+      () => handlePrimingUpload(),
+      { pending: "Uploading...", success: "Uploaded", error: "Upload Failed" },
+    );
+  } catch (error) {
+    renderDisconnected(error);
+    els.settingsNote.textContent =
+      "Document upload failed. Text files work directly; PDF upload requires `pdftotext`.";
+  }
+});
+
 async function refreshLoop() {
   try {
     const snapshot = await fetchHealth();
     renderSnapshot(snapshot);
     await refreshSettings(false);
+    await refreshPrimingDocuments(false);
     await refreshHistory(false);
   } catch (error) {
     renderDisconnected(error);

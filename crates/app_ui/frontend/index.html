@@ -170,6 +170,58 @@
           </section>
         </section>
 
+        <section class="panel panel-agent-config">
+          <div class="panel-head">
+            <h2>Agent Configuration</h2>
+            <p>Tell the interview copilot how to behave, and upload context that should shape its answers.</p>
+          </div>
+          <div class="agent-config-layout">
+            <section class="agent-config-block">
+              <div class="section-label">Instruction</div>
+              <label class="field">
+                <span>Assistant behavior</span>
+                <textarea
+                  id="assistant-instruction"
+                  rows="10"
+                  placeholder="Describe how the interview assistant should help you."
+                ></textarea>
+                <small>
+                  Default behavior is job-interview focused: summarize the interviewer, suggest tailored
+                  answers, and ground them in your background.
+                </small>
+              </label>
+              <div class="settings-actions">
+                <button id="save-agent-config">Save Agent Setup</button>
+              </div>
+            </section>
+
+            <section class="agent-config-block">
+              <div class="section-label">Priming Documents</div>
+              <div class="upload-card">
+                <label class="field">
+                  <span>Upload files</span>
+                  <input
+                    id="priming-file-input"
+                    type="file"
+                    multiple
+                    accept=".txt,.md,.markdown,.json,.html,.htm,.csv,.log,.yaml,.yml,.pdf,text/*,application/json,application/pdf"
+                  />
+                  <small>
+                    Best results come from text or markdown files. PDF upload works if `pdftotext` is installed on
+                    this machine.
+                  </small>
+                </label>
+                <div class="settings-actions">
+                  <button id="upload-priming-documents">Upload Selected Documents</button>
+                </div>
+              </div>
+              <div class="document-list" id="priming-document-list">
+                <div class="empty-state">No priming documents uploaded yet.</div>
+              </div>
+            </section>
+          </div>
+        </section>
+
         <section class="panel panel-history">
           <div class="panel-head">
             <h2>Session History</h2>
