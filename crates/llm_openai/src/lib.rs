@@ -132,13 +132,13 @@ fn build_prompt(
 
     let instruction = match mode {
         ResponseMode::AnswerQuestion => {
-            "Answer the last detected interview question in 3 to 5 short bullet points. Start with the strongest direct answer, then add supporting points, examples, or follow-up angles only if they help."
+            "Answer the last detected interview question as 3 to 5 short bullet points only. Start with the strongest direct answer, then add supporting points, examples, or follow-up angles only if they help."
         }
         ResponseMode::Commentary => {
-            "Provide 1 to 3 brief bullet points with the most useful live interview guidance right now. Focus on what the user should emphasize, clarify, or avoid."
+            "Provide 1 to 3 brief bullet points only with the most useful live interview guidance right now. Focus on what the user should emphasize, clarify, or avoid."
         }
         ResponseMode::SummariseRecent => {
-            "Summarise the recent interview exchange in 3 to 5 short bullet points. Highlight the interviewer intent, key themes, and any likely next question."
+            "Summarise the recent interview exchange as 3 to 5 short bullet points only. Highlight the interviewer intent, key themes, and any likely next question."
         }
     };
 
@@ -150,7 +150,7 @@ fn build_prompt(
         .unwrap_or_default();
 
     format!(
-        "Primary assistant instruction:\n{}\n\nPriming documents:\n{}{}\n\nTask:\n{instruction}\nReturn strict JSON with mode, should_respond, answer, and confidence.\nFormat answer as plain text bullets when useful, using '-' prefixes and short lines. Optimize for fast reading during a live interview. If a selected focus excerpt is provided, prioritize it while still using nearby transcript context. Ground your response in the transcript and uploaded documents. Do not invent credentials, experience, or facts not supported by the provided context.\nTranscript:\n{rendered}",
+        "Primary assistant instruction:\n{}\n\nPriming documents:\n{}{}\n\nTask:\n{instruction}\nReturn strict JSON with mode, should_respond, answer, and confidence.\nFormat answer as plain text bullet lines only, using '-' prefixes and short lines. Do not return a prose paragraph unless there is only one point to make. Optimize for fast reading during a live interview. If a selected focus excerpt is provided, prioritize it while still using nearby transcript context. Ground your response in the transcript and uploaded documents. Do not invent credentials, experience, or facts not supported by the provided context.\nTranscript:\n{rendered}",
         context.instruction,
         priming,
         focus_excerpt,

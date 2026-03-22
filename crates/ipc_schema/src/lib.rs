@@ -187,5 +187,6 @@ pub enum UserAction {
     SummariseSelection(TranscriptSelectionPayload),
     CommentCurrentTopic,
     CommentSelection(TranscriptSelectionPayload),
+    ClearCurrentView,
     SetMode(AppMode),
 }

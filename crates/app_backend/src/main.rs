@@ -752,6 +752,14 @@ async fn handle_action(
                 policy.mark_response_sent(Utc::now());
             }
         }
+        UserAction::ClearCurrentView => {
+            *transcript = TranscriptState::default();
+            let mut locked = snapshot.write().await;
+            locked.transcript = TranscriptSnapshot { partial_text: None, segments: Vec::new() };
+            locked.detected_question = None;
+            locked.latest_assistant = None;
+            locked.recent_errors.clear();
+        }
     }
 
     sync_upload_state(snapshot, upload_gate).await;
