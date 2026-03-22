@@ -61,6 +61,7 @@ dependencies = [
  "audio_capture",
  "audio_pipeline",
  "axum",
+ "base64 0.22.1",
  "chrono",
  "context_engine",
  "dirs",

@@ -3,7 +3,8 @@ use std::str::FromStr;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use ipc_schema::{
-    AppSettingsDto, AssistantEventDto, SessionDetailDto, SessionSummaryDto, TranscriptSegmentDto,
+    AppSettingsDto, AssistantEventDto, PrimingDocumentDto, SessionDetailDto, SessionSummaryDto,
+    TranscriptSegmentDto, default_assistant_instruction,
 };
 use sqlx::{
     Row, SqlitePool,
@@ -14,6 +15,15 @@ use uuid::Uuid;
 
 pub struct Storage {
     pool: SqlitePool,
+}
+
+#[derive(Debug, Clone)]
+pub struct PrimingDocumentRecord {
+    pub id: Uuid,
+    pub file_name: String,
+    pub mime_type: String,
+    pub extracted_text: String,
+    pub created_at: DateTime<Utc>,
 }
 
 impl Storage {
@@ -53,6 +63,10 @@ impl Storage {
                     settings.default_mode =
                         serde_json::from_str(&value).unwrap_or(settings.default_mode)
                 }
+                "assistant_instruction" => {
+                    settings.assistant_instruction =
+                        if value.trim().is_empty() { default_assistant_instruction() } else { value }
+                }
                 _ => {}
             }
         }
@@ -69,6 +83,75 @@ impl Storage {
         .await?;
         self.upsert_setting("auto_start_cloud", settings.auto_start_cloud.to_string()).await?;
         self.upsert_setting("default_mode", serde_json::to_string(&settings.default_mode)?).await?;
+        self.upsert_setting("assistant_instruction", settings.assistant_instruction.clone()).await?;
+        Ok(())
+    }
+
+    pub async fn list_priming_documents(&self) -> Result<Vec<PrimingDocumentDto>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, file_name, mime_type, extracted_text, created_at
+            FROM priming_documents
+            ORDER BY created_at DESC, file_name ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(row_to_priming_document).collect()
+    }
+
+    pub async fn list_priming_document_records(&self) -> Result<Vec<PrimingDocumentRecord>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, file_name, mime_type, extracted_text, created_at
+            FROM priming_documents
+            ORDER BY created_at DESC, file_name ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(row_to_priming_record).collect()
+    }
+
+    pub async fn insert_priming_document(
+        &self,
+        file_name: &str,
+        mime_type: &str,
+        extracted_text: &str,
+    ) -> Result<PrimingDocumentDto> {
+        let id = Uuid::new_v4();
+        let created_at = Utc::now();
+        sqlx::query(
+            r#"
+            INSERT INTO priming_documents (id, file_name, mime_type, extracted_text, created_at)
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            "#,
+        )
+        .bind(id.to_string())
+        .bind(file_name)
+        .bind(mime_type)
+        .bind(extracted_text)
+        .bind(created_at.to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+
+        Ok(PrimingDocumentDto {
+            id,
+            file_name: file_name.to_string(),
+            mime_type: mime_type.to_string(),
+            char_count: extracted_text.chars().count() as u32,
+            preview_text: clip_preview(extracted_text),
+            created_at,
+        })
+    }
+
+    pub async fn delete_priming_document(&self, document_id: Uuid) -> Result<()> {
+        sqlx::query("DELETE FROM priming_documents WHERE id = ?1")
+            .bind(document_id.to_string())
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -368,6 +451,37 @@ fn row_to_assistant_event(row: sqlx::sqlite::SqliteRow) -> Result<AssistantEvent
         confidence: row.try_get::<f64, _>("confidence")? as f32,
         created_at: parse_sqlite_datetime(&row.try_get::<String, _>("created_at")?)?,
     })
+}
+
+fn row_to_priming_document(row: sqlx::sqlite::SqliteRow) -> Result<PrimingDocumentDto> {
+    let extracted_text: String = row.try_get("extracted_text")?;
+    Ok(PrimingDocumentDto {
+        id: Uuid::parse_str(&row.try_get::<String, _>("id")?)?,
+        file_name: row.try_get("file_name")?,
+        mime_type: row.try_get("mime_type")?,
+        char_count: extracted_text.chars().count() as u32,
+        preview_text: clip_preview(&extracted_text),
+        created_at: parse_sqlite_datetime(&row.try_get::<String, _>("created_at")?)?,
+    })
+}
+
+fn row_to_priming_record(row: sqlx::sqlite::SqliteRow) -> Result<PrimingDocumentRecord> {
+    Ok(PrimingDocumentRecord {
+        id: Uuid::parse_str(&row.try_get::<String, _>("id")?)?,
+        file_name: row.try_get("file_name")?,
+        mime_type: row.try_get("mime_type")?,
+        extracted_text: row.try_get("extracted_text")?,
+        created_at: parse_sqlite_datetime(&row.try_get::<String, _>("created_at")?)?,
+    })
+}
+
+fn clip_preview(text: &str) -> String {
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut clipped = normalized.chars().take(220).collect::<String>();
+    if normalized.chars().count() > 220 {
+        clipped.push_str("...");
+    }
+    clipped
 }
 
 fn parse_sqlite_datetime(value: &str) -> Result<DateTime<Utc>> {

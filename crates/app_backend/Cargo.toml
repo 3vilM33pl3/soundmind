@@ -9,6 +9,7 @@ anyhow.workspace = true
 audio_capture = { path = "../audio_capture" }
 audio_pipeline = { path = "../audio_pipeline" }
 axum.workspace = true
+base64.workspace = true
 chrono.workspace = true
 context_engine = { path = "../context_engine" }
 dirs.workspace = true

@@ -14,6 +14,18 @@ pub enum ResponseMode {
 }
 
 #[derive(Debug, Clone)]
+pub struct PrimingDocumentInput {
+    pub file_name: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct AssistantContextInput {
+    pub instruction: String,
+    pub priming_documents: Vec<PrimingDocumentInput>,
+}
+
+#[derive(Debug, Clone)]
 pub struct OpenAiConfig {
     pub api_key: Option<String>,
     pub model: String,
@@ -50,13 +62,14 @@ impl OpenAiReasoner {
         &self,
         mode: ResponseMode,
         transcript: &[TranscriptSegment],
+        context: &AssistantContextInput,
     ) -> Result<LlmResponse> {
         if !self.config.enabled {
             return Ok(fallback_response(mode, transcript));
         }
 
         let api_key = self.config.api_key.as_ref().context(LlmError::NotConfigured)?;
-        let prompt = build_prompt(mode, transcript);
+        let prompt = build_prompt(mode, transcript, context);
         let schema = json!({
             "type": "object",
             "properties": {
@@ -105,7 +118,11 @@ impl OpenAiReasoner {
     }
 }
 
-fn build_prompt(mode: ResponseMode, transcript: &[TranscriptSegment]) -> String {
+fn build_prompt(
+    mode: ResponseMode,
+    transcript: &[TranscriptSegment],
+    context: &AssistantContextInput,
+) -> String {
     let rendered = transcript
         .iter()
         .map(|segment| format!("[{}-{}ms] {}", segment.start_ms, segment.end_ms, segment.text))
@@ -118,9 +135,34 @@ fn build_prompt(mode: ResponseMode, transcript: &[TranscriptSegment]) -> String 
         ResponseMode::SummariseRecent => "Summarise the recent transcript in a concise paragraph.",
     };
 
+    let priming = render_priming_documents(&context.priming_documents);
+
     format!(
-        "{instruction}\nReturn strict JSON with mode, should_respond, answer, and confidence.\nTranscript:\n{rendered}"
+        "Primary assistant instruction:\n{}\n\nPriming documents:\n{}\n\nTask:\n{instruction}\nReturn strict JSON with mode, should_respond, answer, and confidence.\nGround your response in the transcript and uploaded documents. Do not invent credentials, experience, or facts not supported by the provided context.\nTranscript:\n{rendered}",
+        context.instruction,
+        priming,
     )
+}
+
+fn render_priming_documents(documents: &[PrimingDocumentInput]) -> String {
+    if documents.is_empty() {
+        return "No priming documents uploaded.".to_string();
+    }
+
+    let mut remaining_chars = 12_000usize;
+    let mut sections = Vec::new();
+
+    for document in documents {
+        if remaining_chars < 200 {
+            break;
+        }
+
+        let clipped = clip_to_chars(&document.text, remaining_chars.saturating_sub(80));
+        remaining_chars = remaining_chars.saturating_sub(clipped.chars().count() + 80);
+        sections.push(format!("Document: {}\n{}", document.file_name, clipped));
+    }
+
+    sections.join("\n\n")
 }
 
 fn extract_output_text(payload: &Value) -> Option<String> {
@@ -164,6 +206,15 @@ fn clip(text: &str) -> String {
 
     let mut clipped = text.chars().take(180).collect::<String>();
     if text.chars().count() > 180 {
+        clipped.push_str("...");
+    }
+    clipped
+}
+
+fn clip_to_chars(text: &str, max_chars: usize) -> String {
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut clipped = normalized.chars().take(max_chars).collect::<String>();
+    if normalized.chars().count() > max_chars {
         clipped.push_str("...");
     }
     clipped

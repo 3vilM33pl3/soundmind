@@ -12,19 +12,26 @@ use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use chrono::Utc;
 use context_engine::{last_question_candidate, recent_transcript_window};
 use dotenvy::from_filename_override;
 use ipc_schema::{
-    AppMode, AppSettingsDto, AssistantKind, AssistantOutput, BackendStatusSnapshot, CaptureState,
-    CloudState, SessionDetailDto, SessionSummaryDto, TranscriptSegmentDto, TranscriptSnapshot,
-    UserAction,
+    AppMode, AppSettingsDto, AssistantKind, AssistantOutput, BackendStatusSnapshot,
+    CaptureState, CloudState, PrimingDocumentDto, SessionDetailDto, SessionSummaryDto,
+    TranscriptSegmentDto, TranscriptSnapshot, UserAction, default_assistant_instruction,
 };
-use llm_openai::{OpenAiConfig, OpenAiReasoner, ResponseMode, assistant_timestamp};
+use llm_openai::{
+    AssistantContextInput, OpenAiConfig, OpenAiReasoner, PrimingDocumentInput, ResponseMode,
+    assistant_timestamp,
+};
 use policy_engine::PolicyState;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use storage_sqlite::Storage;
 use stt_scribe::{MockTranscriber, ScribeRealtimeConfig, ScribeRealtimeTranscriber, Transcriber};
+use tokio::fs;
+use tokio::process::Command;
 use tokio::sync::{RwLock, mpsc};
 use tower_http::cors::CorsLayer;
 use tracing::{error, info, warn};
@@ -94,6 +101,18 @@ struct AppState {
 #[derive(Debug, Clone, Deserialize)]
 struct SessionExportQuery {
     format: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct UploadPrimingDocumentRequest {
+    file_name: String,
+    mime_type: Option<String>,
+    content_base64: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct DeletePrimingDocumentResponse {
+    deleted: uuid::Uuid,
 }
 
 #[derive(Debug, Clone)]
@@ -231,6 +250,8 @@ async fn main() -> Result<()> {
         .route("/health", get(health))
         .route("/actions", post(post_action))
         .route("/settings", get(get_settings).put(put_settings))
+        .route("/priming-documents", get(get_priming_documents).post(post_priming_document))
+        .route("/priming-documents/{document_id}", axum::routing::delete(delete_priming_document))
         .route("/sessions", get(get_sessions))
         .route("/sessions/purge", post(post_purge_sessions))
         .route("/sessions/{session_id}", get(get_session_detail).delete(delete_session))
@@ -586,6 +607,7 @@ async fn handle_action(
                 session_id,
                 snapshot,
                 storage,
+                settings,
                 openai,
                 policy,
             )
@@ -599,6 +621,7 @@ async fn handle_action(
                 session_id,
                 snapshot,
                 storage,
+                settings,
                 openai,
                 policy,
             )
@@ -612,6 +635,7 @@ async fn handle_action(
                 session_id,
                 snapshot,
                 storage,
+                settings,
                 openai,
                 policy,
             )
@@ -631,6 +655,7 @@ async fn maybe_generate_response(
     session_id: Uuid,
     snapshot: &Arc<RwLock<BackendStatusSnapshot>>,
     storage: &Storage,
+    settings: &Arc<RwLock<AppSettingsDto>>,
     openai: &OpenAiReasoner,
     policy: &mut PolicyState,
 ) -> Result<()> {
@@ -657,7 +682,8 @@ async fn maybe_generate_response(
     }
 
     snapshot.write().await.cloud_state = CloudState::LlmActive;
-    let response = openai.respond(mode, &window).await?;
+    let assistant_context = build_assistant_context(settings, storage).await?;
+    let response = openai.respond(mode, &window, &assistant_context).await?;
     policy.mark_response_sent(Utc::now());
 
     let assistant = AssistantOutput {
@@ -681,6 +707,32 @@ async fn maybe_generate_response(
     storage.insert_assistant_event(session_id, kind, &response.answer, response.confidence).await?;
 
     Ok(())
+}
+
+async fn build_assistant_context(
+    settings: &Arc<RwLock<AppSettingsDto>>,
+    storage: &Storage,
+) -> Result<AssistantContextInput> {
+    let instruction = {
+        let settings = settings.read().await;
+        if settings.assistant_instruction.trim().is_empty() {
+            default_assistant_instruction()
+        } else {
+            settings.assistant_instruction.clone()
+        }
+    };
+
+    let priming_documents = storage
+        .list_priming_document_records()
+        .await?
+        .into_iter()
+        .map(|document| PrimingDocumentInput {
+            file_name: document.file_name,
+            text: document.extracted_text,
+        })
+        .collect();
+
+    Ok(AssistantContextInput { instruction, priming_documents })
 }
 
 async fn refresh_snapshot(
@@ -808,10 +860,74 @@ async fn get_settings(State(state): State<AppState>) -> Json<AppSettingsDto> {
     Json(state.settings.read().await.clone())
 }
 
+async fn get_priming_documents(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<PrimingDocumentDto>>, StatusCode> {
+    let documents = state
+        .storage
+        .list_priming_documents()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(documents))
+}
+
+async fn post_priming_document(
+    State(state): State<AppState>,
+    Json(request): Json<UploadPrimingDocumentRequest>,
+) -> Result<Json<PrimingDocumentDto>, StatusCode> {
+    let decoded = BASE64_STANDARD
+        .decode(request.content_base64.as_bytes())
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let mime_type = request
+        .mime_type
+        .clone()
+        .filter(|mime_type| !mime_type.trim().is_empty())
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+
+    let extracted_text = extract_document_text(&request.file_name, &mime_type, &decoded)
+        .await
+        .map_err(|error| {
+            warn!(?error, file_name = %request.file_name, "failed to ingest priming document");
+            StatusCode::BAD_REQUEST
+        })?;
+
+    let document = state
+        .storage
+        .insert_priming_document(&request.file_name, &mime_type, &extracted_text)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    state
+        .storage
+        .append_audit_event(None, &format!("priming_document_added:{}", request.file_name))
+        .await
+        .ok();
+    Ok(Json(document))
+}
+
+async fn delete_priming_document(
+    State(state): State<AppState>,
+    AxumPath(document_id): AxumPath<Uuid>,
+) -> Result<Json<DeletePrimingDocumentResponse>, StatusCode> {
+    state
+        .storage
+        .delete_priming_document(document_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    state
+        .storage
+        .append_audit_event(None, &format!("priming_document_deleted:{document_id}"))
+        .await
+        .ok();
+    Ok(Json(DeletePrimingDocumentResponse { deleted: document_id }))
+}
+
 async fn put_settings(
     State(state): State<AppState>,
-    Json(settings): Json<AppSettingsDto>,
+    Json(mut settings): Json<AppSettingsDto>,
 ) -> Result<Json<AppSettingsDto>, StatusCode> {
+    if settings.assistant_instruction.trim().is_empty() {
+        settings.assistant_instruction = default_assistant_instruction();
+    }
     state.storage.save_settings(&settings).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     *state.settings.write().await = settings.clone();
     Ok(Json(settings))
@@ -895,6 +1011,83 @@ async fn get_session_export(
         )
             .into_response()),
     }
+}
+
+async fn extract_document_text(file_name: &str, mime_type: &str, bytes: &[u8]) -> Result<String> {
+    let extension = file_name
+        .rsplit('.')
+        .next()
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_default();
+
+    let text = if is_text_like_mime(mime_type) || matches!(
+        extension.as_str(),
+        "txt" | "md" | "markdown" | "json" | "html" | "htm" | "csv" | "log" | "yaml" | "yml"
+    ) {
+        String::from_utf8(bytes.to_vec()).context("document is not valid UTF-8 text")?
+    } else if mime_type == "application/pdf" || extension == "pdf" {
+        extract_pdf_text(bytes).await?
+    } else {
+        anyhow::bail!(
+            "Unsupported document format. Upload text, markdown, JSON, HTML, CSV, YAML, or PDF."
+        );
+    };
+
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = normalized.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("The uploaded document did not contain usable text.");
+    }
+    if trimmed.chars().count() > 120_000 {
+        anyhow::bail!("The uploaded document is too large after text extraction.");
+    }
+
+    Ok(trimmed.to_string())
+}
+
+fn is_text_like_mime(mime_type: &str) -> bool {
+    mime_type.starts_with("text/")
+        || matches!(
+            mime_type,
+            "application/json"
+                | "application/ld+json"
+                | "application/xml"
+                | "application/xhtml+xml"
+                | "application/yaml"
+                | "application/x-yaml"
+        )
+}
+
+async fn extract_pdf_text(bytes: &[u8]) -> Result<String> {
+    let temp_path = std::env::temp_dir().join(format!("soundmind-upload-{}.pdf", Uuid::new_v4()));
+    fs::write(&temp_path, bytes).await.context("failed to stage uploaded PDF")?;
+
+    let output = match Command::new("pdftotext")
+        .arg("-layout")
+        .arg(&temp_path)
+        .arg("-")
+        .output()
+        .await
+    {
+        Ok(output) => output,
+        Err(error) => {
+            let _ = fs::remove_file(&temp_path).await;
+            if error.kind() == std::io::ErrorKind::NotFound {
+                anyhow::bail!(
+                    "PDF upload requires `pdftotext` to be installed on this machine."
+                );
+            }
+            return Err(error).context("failed to run pdftotext");
+        }
+    };
+    let _ = fs::remove_file(&temp_path).await;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        anyhow::bail!("Failed to extract PDF text: {stderr}");
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 async fn shutdown_signal() {
@@ -1028,6 +1221,7 @@ async fn load_or_initialize_settings(
         transcript_storage_enabled: true,
         auto_start_cloud: config.app.auto_start_cloud,
         default_mode: config.app.mode,
+        assistant_instruction: default_assistant_instruction(),
     };
     storage.save_settings(&settings).await?;
     Ok(settings)
