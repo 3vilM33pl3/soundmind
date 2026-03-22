@@ -23,6 +23,12 @@ fn run() -> Result<()> {
         .setup(|app| {
             install_tray(app)?;
             install_global_shortcuts(app.handle());
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.eval(&format!(
+                    "window.SOUNDMIND_VERSION = {:?};",
+                    env!("CARGO_PKG_VERSION")
+                ));
+            }
             Ok(())
         })
         .on_menu_event(|app, event| match event.id().as_ref() {

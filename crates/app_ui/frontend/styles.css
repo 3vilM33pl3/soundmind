@@ -58,6 +58,25 @@ body {
   min-width: 0;
 }
 
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.version-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.74);
+  color: var(--muted);
+  font-size: 0.85rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .eyebrow {
   margin: 0 0 12px;
   text-transform: uppercase;
@@ -169,7 +188,7 @@ h4 {
 
 .primary-action-controls {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
 }
 

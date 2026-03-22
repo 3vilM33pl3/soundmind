@@ -1,10 +1,12 @@
 const DEFAULT_BACKEND_URL = "http://127.0.0.1:8765";
 const backendUrl = window.localStorage.getItem("soundmind.backendUrl") || DEFAULT_BACKEND_URL;
+const APP_VERSION = window.SOUNDMIND_VERSION || "0.1.0";
 
 const state = {
   snapshot: null,
   settings: null,
   transcriptSelection: null,
+  stickyTranscriptSelection: null,
   primingDocuments: [],
   sessions: [],
   selectedSessionId: null,
@@ -28,7 +30,9 @@ const els = {
   actionSummaryButton: document.querySelector("#action-summary-button"),
   actionCommentButton: document.querySelector("#action-comment-button"),
   clearSelectionButton: document.querySelector("#clear-selection-button"),
+  clearAllButton: document.querySelector("#clear-all-button"),
   selectionStatus: document.querySelector("#selection-status"),
+  appVersion: document.querySelector("#app-version"),
   errorList: document.querySelector("#error-list"),
   settingsMode: document.querySelector("#settings-mode"),
   retentionDays: document.querySelector("#retention-days"),
@@ -264,7 +268,7 @@ function renderSnapshot(snapshot) {
       <div class="assistant-meta">
         ${escapeHtml(snapshot.latest_assistant.kind)} • ${formatTime(snapshot.latest_assistant.created_at)}
       </div>
-      <div class="assistant-content">${renderAssistantContent(snapshot.latest_assistant.content)}</div>
+      <div class="assistant-content">${renderAssistantContent(snapshot.latest_assistant.content, snapshot.latest_assistant.kind)}</div>
     `;
   } else {
     els.assistantCard.innerHTML = `
@@ -285,7 +289,7 @@ function renderSnapshot(snapshot) {
   renderSelectionState();
 }
 
-function renderAssistantContent(content) {
+function renderAssistantContent(content, kind = "Notice") {
   const lines = content
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -296,7 +300,7 @@ function renderAssistantContent(content) {
   }
 
   const bulletLines = lines.filter((line) => /^[*\-•]\s+/.test(line));
-  if (bulletLines.length >= 2 && bulletLines.length === lines.length) {
+  if (bulletLines.length >= 1 && bulletLines.length === lines.length) {
     return `
       <ul class="assistant-bullets">
         ${bulletLines
@@ -306,7 +310,27 @@ function renderAssistantContent(content) {
     `;
   }
 
+  const shouldForceBullets = kind !== "Notice";
+  if (shouldForceBullets) {
+    const bulletCandidates = contentToBulletCandidates(lines);
+    if (bulletCandidates.length >= 2) {
+      return `
+        <ul class="assistant-bullets">
+          ${bulletCandidates.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}
+        </ul>
+      `;
+    }
+  }
+
   return lines.map((line) => `<p>${escapeHtml(line)}</p>`).join("");
+}
+
+function contentToBulletCandidates(lines) {
+  const merged = lines.join(" ");
+  return merged
+    .split(/(?<=[.!?])\s+(?=[A-Z0-9])/)
+    .map((line) => line.trim().replace(/^[*\-•]\s+/, ""))
+    .filter((line) => line.length > 0);
 }
 
 function bindTranscriptInteractions() {
@@ -367,7 +391,9 @@ function updateTranscriptSelection() {
     return;
   }
 
-  state.transcriptSelection = { selected_text: selectedText, segment_ids: [...new Set(segmentIds)] };
+  const nextSelection = { selected_text: selectedText, segment_ids: [...new Set(segmentIds)] };
+  state.transcriptSelection = nextSelection;
+  state.stickyTranscriptSelection = nextSelection;
   renderSelectionState();
 }
 
@@ -384,7 +410,7 @@ function selectionIsInsideTranscript(range) {
 }
 
 function renderSelectionState() {
-  const selection = state.transcriptSelection;
+  const selection = state.transcriptSelection || state.stickyTranscriptSelection;
   if (!selection) {
     els.selectionStatus.className = "selection-status";
     els.selectionStatus.textContent =
@@ -412,6 +438,7 @@ function clearTranscriptSelection() {
     selection.removeAllRanges();
   }
   state.transcriptSelection = null;
+  state.stickyTranscriptSelection = null;
   renderSelectionState();
 }
 
@@ -843,7 +870,7 @@ function actionLabels(action) {
 }
 
 function resolvePrimaryAction(action) {
-  const selection = state.transcriptSelection;
+  const selection = state.transcriptSelection || state.stickyTranscriptSelection;
   if (!selection) {
     return action;
   }
@@ -928,6 +955,14 @@ async function handlePrimingUpload() {
   return true;
 }
 
+async function handleClearAll() {
+  clearTranscriptSelection();
+  await sendAction("ClearCurrentView");
+  const snapshot = await fetchHealth();
+  renderSnapshot(snapshot);
+  return true;
+}
+
 document.querySelectorAll(".hero-actions [data-action]").forEach((button) => {
   button.addEventListener("click", async () => {
     try {
@@ -951,6 +986,9 @@ document.querySelectorAll(".hero-actions [data-action]").forEach((button) => {
   [els.actionSummaryButton, "SummariseLastMinute"],
   [els.actionCommentButton, "CommentCurrentTopic"],
 ].forEach(([button, defaultAction]) => {
+  button.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+  });
   button.addEventListener("click", async () => {
     const action = resolvePrimaryAction(defaultAction);
     try {
@@ -969,14 +1007,33 @@ document.querySelectorAll(".hero-actions [data-action]").forEach((button) => {
   });
 });
 
+els.clearSelectionButton.addEventListener("mousedown", (event) => {
+  event.preventDefault();
+});
 els.clearSelectionButton.addEventListener("click", () => {
   clearTranscriptSelection();
+});
+
+els.clearAllButton.addEventListener("mousedown", (event) => {
+  event.preventDefault();
+});
+els.clearAllButton.addEventListener("click", async () => {
+  try {
+    await runWithButtonFeedback(
+      els.clearAllButton,
+      () => handleClearAll(),
+      { pending: "Clearing...", success: "Cleared", error: "Clear Failed" },
+    );
+  } catch (error) {
+    renderDisconnected(error);
+  }
 });
 
 document.addEventListener("selectionchange", () => {
   updateTranscriptSelection();
 });
 
+els.appVersion.textContent = `v${APP_VERSION}`;
 els.saveSettings.addEventListener("click", async () => {
   try {
     await runWithButtonFeedback(
