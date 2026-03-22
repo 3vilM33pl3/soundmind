@@ -5,6 +5,8 @@ current output monitor, transcribes speech in near real time, detects likely
 questions, and lets you generate answers, summaries, and commentary while
 keeping session history and agent setup locally in SQLite.
 
+Current release: `v0.2.0`
+
 ![Soundmind desktop UI](docs/assets/app-screenshot.png)
 
 ## What it does
@@ -22,6 +24,22 @@ keeping session history and agent setup locally in SQLite.
   installation
 
 ## Quick start
+
+### Install from Debian package
+
+Download the latest `soundmind_*_amd64.deb` from GitHub Releases, then:
+
+```bash
+sudo apt install ./soundmind_0.2.0_amd64.deb
+soundmind-setup-user
+soundmind
+```
+
+The package installs the desktop app, backend, config example, desktop entry,
+icon, and a `systemd --user` service unit. `soundmind-setup-user` prepares
+`~/.config/soundmind` and enables the backend for the current user.
+
+### Run from source
 
 1. Copy the config:
 
@@ -101,3 +119,4 @@ The current build includes:
 - configurable interview instruction plus uploaded priming documents
 - tray integration and best-effort global shortcuts
 - packaging helpers and `systemd --user` assets
+- Debian release packaging and GitHub release tooling

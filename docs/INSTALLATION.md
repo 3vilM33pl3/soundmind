@@ -3,9 +3,41 @@
 ## Requirements
 
 - Ubuntu with PulseAudio or PipeWire's Pulse compatibility layer
+- `sudo` privileges if installing the Debian package system-wide
 - Rust toolchain if running from source
 - ElevenLabs API key for live transcription
 - OpenAI API key for answer, summary, and commentary actions
+
+## Install from Debian package
+
+1. Download the latest `soundmind_*_amd64.deb` from GitHub Releases.
+
+2. Install it:
+
+```bash
+sudo apt install ./soundmind_0.2.0_amd64.deb
+```
+
+3. Prepare your user config and service:
+
+```bash
+soundmind-setup-user
+```
+
+4. Launch the app:
+
+```bash
+soundmind
+```
+
+The Debian package installs:
+
+- `/usr/bin/soundmind`
+- `/usr/bin/soundmind-backend`
+- `/usr/bin/soundmind-setup-user`
+- `/usr/lib/systemd/user/soundmind-backend.service`
+- `/usr/share/soundmind/config.example.toml`
+- the desktop entry and icon
 
 ## Run from source
 
@@ -78,5 +110,18 @@ When installed, the backend looks in this order:
 ./scripts/package-release.sh
 ```
 
-This creates a tarball under `dist/` containing release binaries, config,
-desktop entry, icon, and systemd service template.
+This creates:
+
+- `dist/soundmind-linux-<version>.tar.gz`
+- `dist/soundmind_<version>_amd64.deb`
+- `dist/soundmind_<version>_SHA256SUMS`
+
+## Publish a GitHub release
+
+```bash
+./scripts/release-github.sh
+```
+
+This builds the release artifacts, creates or reuses a `v<version>` git tag,
+pushes it to GitHub, and uploads the tarball, Debian package, and checksum file
+to a GitHub release.

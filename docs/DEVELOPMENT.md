@@ -67,7 +67,16 @@ Create a release bundle:
 ./scripts/package-release.sh
 ```
 
+Publish a GitHub release:
+
+```bash
+./scripts/release-github.sh
+```
+
 Relevant assets:
 
+- `packaging/bin/soundmind`
+- `packaging/bin/soundmind-backend`
+- `packaging/bin/soundmind-setup-user`
 - `packaging/systemd/soundmind-backend.service`
 - `packaging/linux/soundmind.desktop.in`
