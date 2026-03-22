@@ -2,7 +2,9 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use ipc_schema::{AppSettingsDto, AssistantEventDto, SessionDetailDto, SessionSummaryDto, TranscriptSegmentDto};
+use ipc_schema::{
+    AppSettingsDto, AssistantEventDto, SessionDetailDto, SessionSummaryDto, TranscriptSegmentDto,
+};
 use sqlx::{
     Row, SqlitePool,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
@@ -46,7 +48,7 @@ impl Storage {
                 "transcript_storage_enabled" => {
                     settings.transcript_storage_enabled = value.parse().unwrap_or(true)
                 }
-                "auto_start_cloud" => settings.auto_start_cloud = value.parse().unwrap_or(true),
+                "auto_start_cloud" => settings.auto_start_cloud = value.parse().unwrap_or(false),
                 "default_mode" => {
                     settings.default_mode =
                         serde_json::from_str(&value).unwrap_or(settings.default_mode)
@@ -66,8 +68,7 @@ impl Storage {
         )
         .await?;
         self.upsert_setting("auto_start_cloud", settings.auto_start_cloud.to_string()).await?;
-        self.upsert_setting("default_mode", serde_json::to_string(&settings.default_mode)?)
-            .await?;
+        self.upsert_setting("default_mode", serde_json::to_string(&settings.default_mode)?).await?;
         Ok(())
     }
 
@@ -240,11 +241,7 @@ impl Storage {
         .map(row_to_assistant_event)
         .collect::<Result<Vec<_>>>()?;
 
-        Ok(Some(SessionDetailDto {
-            session: summary,
-            transcript_segments,
-            assistant_events,
-        }))
+        Ok(Some(SessionDetailDto { session: summary, transcript_segments, assistant_events }))
     }
 
     pub async fn delete_session(&self, session_id: Uuid) -> Result<()> {

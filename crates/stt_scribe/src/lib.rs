@@ -188,9 +188,8 @@ impl ScribeRealtimeTranscriber {
                     return Ok(());
                 }
                 Err(error) => {
-                    let message = format!(
-                        "ElevenLabs reconnect attempt {attempt}/3 failed: {error}"
-                    );
+                    let message =
+                        format!("ElevenLabs reconnect attempt {attempt}/3 failed: {error}");
                     self.event_tx.send(TranscriberEvent::Error(message)).await.ok();
                     last_error = Some(error);
                     tokio::time::sleep(delay).await;
@@ -281,9 +280,7 @@ fn next_backoff(current: Duration) -> Duration {
 fn build_request(config: &ScribeRealtimeConfig) -> Result<Request<()>> {
     let mut url = format!(
         "wss://api.elevenlabs.io/v1/speech-to-text/realtime?model_id={}&include_timestamps={}&audio_format=pcm_16000&commit_strategy=manual&enable_logging={}",
-        config.model_id,
-        config.include_timestamps,
-        config.enable_logging
+        config.model_id, config.include_timestamps, config.enable_logging
     );
 
     if let Some(language_code) = &config.language_code {
@@ -308,12 +305,8 @@ async fn parse_realtime_event(
     };
 
     let message_type = value.get("message_type").and_then(Value::as_str).unwrap_or_default();
-    let text = value
-        .get("text")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .unwrap_or_default()
-        .to_string();
+    let text =
+        value.get("text").and_then(Value::as_str).map(str::trim).unwrap_or_default().to_string();
 
     match message_type {
         "session_started" => Some(TranscriberEvent::Health(TranscriberHealth {
@@ -344,7 +337,9 @@ async fn parse_realtime_event(
                 source: "elevenlabs_scribe_realtime".to_string(),
             }))
         }
-        other if other.contains("error") => Some(TranscriberEvent::Error(extract_error_message(&value))),
+        other if other.contains("error") => {
+            Some(TranscriberEvent::Error(extract_error_message(&value)))
+        }
         _ => None,
     }
 }

@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use audio_capture::{
     AudioSource, CaptureConfig, CaptureEvent, MockAudioSource, ParecMonitorAudioSource,
 };
-use audio_pipeline::{AudioPipeline, AudioPipelineConfig};
+use audio_pipeline::{AudioChunk, AudioPipeline, AudioPipelineConfig};
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -45,6 +45,8 @@ struct RootConfig {
 struct AppSection {
     mode: AppMode,
     auto_start: bool,
+    #[serde(default = "default_auto_start_cloud")]
+    auto_start_cloud: bool,
     http_bind: String,
     simulate_transcriber: bool,
 }
@@ -57,6 +59,10 @@ struct CaptureSection {
     channels: u16,
     silence_threshold: f32,
     chunk_ms: u64,
+    #[serde(default = "default_speech_hold_ms")]
+    speech_hold_ms: u64,
+    #[serde(default = "default_idle_timeout_ms")]
+    idle_timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -90,6 +96,84 @@ struct SessionExportQuery {
     format: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct UploadGate {
+    speech_hold_ms: u64,
+    idle_timeout_ms: u64,
+    first_chunk_start_ms: Option<u64>,
+    last_speech_end_ms: Option<u64>,
+    auto_paused: bool,
+    upload_active: bool,
+}
+
+impl UploadGate {
+    fn new(config: &CaptureSection) -> Self {
+        Self {
+            speech_hold_ms: config.speech_hold_ms,
+            idle_timeout_ms: config.idle_timeout_ms,
+            first_chunk_start_ms: None,
+            last_speech_end_ms: None,
+            auto_paused: false,
+            upload_active: false,
+        }
+    }
+
+    fn mark_privacy_paused(&mut self) {
+        self.upload_active = false;
+    }
+
+    fn mark_manual_cloud_paused(&mut self) {
+        self.upload_active = false;
+        self.auto_paused = false;
+    }
+
+    fn evaluate(&mut self, chunk: &AudioChunk, manual_cloud_paused: bool) -> bool {
+        self.first_chunk_start_ms.get_or_insert(chunk.start_ms);
+
+        if manual_cloud_paused {
+            self.mark_manual_cloud_paused();
+            return false;
+        }
+
+        if chunk.speech_likely {
+            self.last_speech_end_ms = Some(chunk.end_ms);
+            self.auto_paused = false;
+            self.upload_active = true;
+            return true;
+        }
+
+        let within_speech_hold = self
+            .last_speech_end_ms
+            .map(|last_speech_end_ms| {
+                chunk.start_ms.saturating_sub(last_speech_end_ms) <= self.speech_hold_ms
+            })
+            .unwrap_or(false);
+
+        if within_speech_hold {
+            self.upload_active = true;
+            return true;
+        }
+
+        let idle_reference_ms =
+            self.last_speech_end_ms.or(self.first_chunk_start_ms).unwrap_or(chunk.start_ms);
+        self.auto_paused = chunk.end_ms.saturating_sub(idle_reference_ms) >= self.idle_timeout_ms;
+        self.upload_active = false;
+        false
+    }
+}
+
+fn default_auto_start_cloud() -> bool {
+    false
+}
+
+fn default_speech_hold_ms() -> u64 {
+    1_200
+}
+
+fn default_idle_timeout_ms() -> u64 {
+    5_000
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -113,6 +197,7 @@ async fn main() -> Result<()> {
         },
         cloud_state: CloudState::Off,
         privacy_pause: !config.app.auto_start,
+        cloud_pause: !initial_settings.auto_start_cloud,
         ..BackendStatusSnapshot::default()
     }));
 
@@ -129,15 +214,14 @@ async fn main() -> Result<()> {
     let runtime_storage = Arc::clone(&storage);
     let runtime_settings = Arc::clone(&settings);
     tokio::spawn(async move {
-        if let Err(error) =
-            run_runtime(
-                config_for_runtime,
-                runtime_snapshot,
-                runtime_storage,
-                runtime_settings,
-                action_rx,
-            )
-            .await
+        if let Err(error) = run_runtime(
+            config_for_runtime,
+            runtime_snapshot,
+            runtime_storage,
+            runtime_settings,
+            action_rx,
+        )
+        .await
         {
             error!(?error, "runtime exited with an error");
         }
@@ -184,6 +268,7 @@ async fn run_runtime(
         ..PolicyState::default()
     };
     let mut transcript = TranscriptState::default();
+    let mut upload_gate = UploadGate::new(&config.capture);
     let (mut transcriber, stt_provider) = build_transcriber(&config, &snapshot).await?;
 
     let capture_config = CaptureConfig {
@@ -220,13 +305,9 @@ async fn run_runtime(
         let mut locked = snapshot.write().await;
         locked.session_id = Some(session_id);
         locked.stt_provider = Some(stt_provider);
-        locked.cloud_state = if config.providers.openai.enabled || config.providers.elevenlabs.enabled
-        {
-            CloudState::SttActive
-        } else {
-            CloudState::Off
-        };
+        locked.cloud_pause = !runtime_settings.auto_start_cloud;
     }
+    sync_upload_state(&snapshot, &upload_gate).await;
     drain_transcriber_events(
         &snapshot,
         &storage,
@@ -252,6 +333,7 @@ async fn run_runtime(
                     &openai,
                     &mut transcript,
                     &mut policy,
+                    &mut upload_gate,
                 ).await?;
             }
             maybe_event = capture_rx.recv() => {
@@ -275,21 +357,43 @@ async fn run_runtime(
                             .await?;
                     }
                     CaptureEvent::Frames(frame) => {
-                        if snapshot.read().await.privacy_pause {
+                        let (privacy_pause, cloud_pause) = {
+                            let locked = snapshot.read().await;
+                            (locked.privacy_pause, locked.cloud_pause)
+                        };
+
+                        if privacy_pause {
+                            upload_gate.mark_privacy_paused();
+                            sync_upload_state(&snapshot, &upload_gate).await;
                             continue;
                         }
 
                         if let Some(chunk) = pipeline.push_frame(frame) {
-                            transcriber.push_audio(chunk).await?;
-                            drain_transcriber_events(
-                                &snapshot,
-                                &storage,
-                                &settings,
-                                session_id,
-                                &mut transcript,
-                                transcriber.as_mut(),
-                            )
-                            .await?;
+                            let was_auto_paused = upload_gate.auto_paused;
+                            let should_send = upload_gate.evaluate(&chunk, cloud_pause);
+                            sync_upload_state(&snapshot, &upload_gate).await;
+
+                            if upload_gate.auto_paused != was_auto_paused {
+                                let event = if upload_gate.auto_paused {
+                                    "cloud_auto_paused:idle_timeout"
+                                } else {
+                                    "cloud_auto_resumed:speech_detected"
+                                };
+                                storage.append_audit_event(Some(session_id), event).await?;
+                            }
+
+                            if should_send {
+                                transcriber.push_audio(chunk).await?;
+                                drain_transcriber_events(
+                                    &snapshot,
+                                    &storage,
+                                    &settings,
+                                    session_id,
+                                    &mut transcript,
+                                    transcriber.as_mut(),
+                                )
+                                .await?;
+                            }
                         }
                     }
                     CaptureEvent::Error(message) => {
@@ -325,10 +429,10 @@ async fn drain_transcriber_events(
 ) -> Result<()> {
     while let Some(event) = transcriber.try_recv_event() {
         match &event {
-            stt_scribe::TranscriberEvent::Health(health) => {
+            stt_scribe::TranscriberEvent::Health(_) => {
                 let mut locked = snapshot.write().await;
-                locked.cloud_state = CloudState::SttActive;
-                locked.stt_status = Some(health.message.clone());
+                locked.cloud_state = effective_cloud_state(&locked);
+                locked.stt_status = Some(effective_stt_status(&locked));
             }
             stt_scribe::TranscriberEvent::Error(message) => {
                 push_stt_error(snapshot, message.clone()).await;
@@ -375,7 +479,10 @@ async fn build_transcriber(
                         ));
                     }
                     Err(error) => {
-                        warn!(?error, "failed to start ElevenLabs realtime transcriber; falling back to mock");
+                        warn!(
+                            ?error,
+                            "failed to start ElevenLabs realtime transcriber; falling back to mock"
+                        );
                         push_stt_error(
                             snapshot,
                             format!("ElevenLabs startup failed; falling back to mock: {error}"),
@@ -436,6 +543,7 @@ async fn handle_action(
     openai: &OpenAiReasoner,
     transcript: &mut TranscriptState,
     policy: &mut PolicyState,
+    upload_gate: &mut UploadGate,
 ) -> Result<()> {
     match action {
         UserAction::Start => {
@@ -444,21 +552,21 @@ async fn handle_action(
             locked.capture_state = CaptureState::Capturing;
         }
         UserAction::Stop => {
+            upload_gate.mark_privacy_paused();
             let mut locked = snapshot.write().await;
             locked.privacy_pause = true;
             locked.capture_state = CaptureState::Paused;
         }
         UserAction::PauseCloud => {
             policy.cloud_paused = true;
+            upload_gate.mark_manual_cloud_paused();
             let mut locked = snapshot.write().await;
             locked.cloud_pause = true;
-            locked.cloud_state = CloudState::Paused;
         }
         UserAction::ResumeCloud => {
             policy.cloud_paused = false;
             let mut locked = snapshot.write().await;
             locked.cloud_pause = false;
-            locked.cloud_state = CloudState::SttActive;
         }
         UserAction::SetMode(mode) => {
             policy.mode = mode;
@@ -511,6 +619,7 @@ async fn handle_action(
         }
     }
 
+    sync_upload_state(snapshot, upload_gate).await;
     storage.append_audit_event(Some(session_id), &format!("user_action:{action:?}")).await?;
     Ok(())
 }
@@ -566,8 +675,7 @@ async fn maybe_generate_response(
     {
         let mut locked = snapshot.write().await;
         locked.latest_assistant = Some(assistant.clone());
-        locked.cloud_state =
-            if locked.cloud_pause { CloudState::Paused } else { CloudState::SttActive };
+        locked.cloud_state = effective_cloud_state(&locked);
     }
 
     storage.insert_assistant_event(session_id, kind, &response.answer, response.confidence).await?;
@@ -582,11 +690,7 @@ async fn refresh_snapshot(
     let mut locked = snapshot.write().await;
     locked.transcript = TranscriptSnapshot {
         partial_text: transcript.partial_text().map(ToOwned::to_owned),
-        segments: transcript
-            .last_n_segments(MAX_HEALTH_SEGMENTS)
-            .into_iter()
-            .map(to_dto)
-            .collect(),
+        segments: transcript.last_n_segments(MAX_HEALTH_SEGMENTS).into_iter().map(to_dto).collect(),
     };
     locked.detected_question = transcript.last_question_candidate().map(to_dto);
 }
@@ -616,6 +720,8 @@ async fn push_error(snapshot: &Arc<RwLock<BackendStatusSnapshot>>, message: Stri
 async fn push_stt_error(snapshot: &Arc<RwLock<BackendStatusSnapshot>>, message: String) {
     let mut locked = snapshot.write().await;
     locked.cloud_state = CloudState::Error;
+    locked.audio_upload_active = false;
+    locked.cloud_auto_pause = false;
     locked.stt_status = Some(message.clone());
     locked.recent_errors.push(message);
     if locked.recent_errors.len() > 5 {
@@ -633,6 +739,51 @@ async fn push_recovering(snapshot: &Arc<RwLock<BackendStatusSnapshot>>, message:
     if locked.recent_errors.len() > 5 {
         let excess = locked.recent_errors.len() - 5;
         locked.recent_errors.drain(0..excess);
+    }
+}
+
+async fn sync_upload_state(
+    snapshot: &Arc<RwLock<BackendStatusSnapshot>>,
+    upload_gate: &UploadGate,
+) {
+    let mut locked = snapshot.write().await;
+    if locked.cloud_state == CloudState::Error {
+        locked.audio_upload_active = false;
+        locked.cloud_auto_pause = false;
+        return;
+    }
+
+    locked.audio_upload_active =
+        !locked.privacy_pause && !locked.cloud_pause && upload_gate.upload_active;
+    locked.cloud_auto_pause =
+        !locked.privacy_pause && !locked.cloud_pause && upload_gate.auto_paused;
+    locked.cloud_state = effective_cloud_state(&locked);
+    locked.stt_status = Some(effective_stt_status(&locked));
+}
+
+fn effective_cloud_state(snapshot: &BackendStatusSnapshot) -> CloudState {
+    if snapshot.stt_provider.is_none() {
+        return CloudState::Off;
+    }
+
+    if snapshot.cloud_pause || snapshot.cloud_auto_pause {
+        return CloudState::Paused;
+    }
+
+    CloudState::SttActive
+}
+
+fn effective_stt_status(snapshot: &BackendStatusSnapshot) -> String {
+    if snapshot.privacy_pause {
+        "local capture paused before cloud upload".to_string()
+    } else if snapshot.cloud_pause {
+        "cloud processing paused manually".to_string()
+    } else if snapshot.cloud_auto_pause {
+        "idle auto-pause active; waiting for speech to resume uploads".to_string()
+    } else if snapshot.audio_upload_active {
+        "speech detected; uploading audio to the STT provider".to_string()
+    } else {
+        "speech gate active; waiting for speech before upload".to_string()
     }
 }
 
@@ -661,11 +812,7 @@ async fn put_settings(
     State(state): State<AppState>,
     Json(settings): Json<AppSettingsDto>,
 ) -> Result<Json<AppSettingsDto>, StatusCode> {
-    state
-        .storage
-        .save_settings(&settings)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    state.storage.save_settings(&settings).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     *state.settings.write().await = settings.clone();
     Ok(Json(settings))
 }
@@ -673,11 +820,8 @@ async fn put_settings(
 async fn get_sessions(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<SessionSummaryDto>>, StatusCode> {
-    let sessions = state
-        .storage
-        .list_sessions(100)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let sessions =
+        state.storage.list_sessions(100).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(sessions))
 }
 
@@ -739,20 +883,15 @@ async fn get_session_export(
         "markdown" | "md" => {
             let body = render_session_markdown(&session);
             Ok((
-                [(
-                    header::CONTENT_TYPE,
-                    HeaderValue::from_static("text/markdown; charset=utf-8"),
-                )],
+                [(header::CONTENT_TYPE, HeaderValue::from_static("text/markdown; charset=utf-8"))],
                 body,
             )
                 .into_response())
         }
         _ => Ok((
-            [(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("application/json"),
-            )],
-            serde_json::to_string_pretty(&session).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+            [(header::CONTENT_TYPE, HeaderValue::from_static("application/json"))],
+            serde_json::to_string_pretty(&session)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
         )
             .into_response()),
     }
@@ -804,6 +943,7 @@ fn load_config() -> Result<RootConfig> {
         } else {
             config.storage.retention_days.to_string()
         },
+        auto_start_cloud = config.app.auto_start_cloud,
         simulate_transcriber = config.app.simulate_transcriber,
         "loaded configuration"
     );
@@ -875,7 +1015,10 @@ fn sqlite_url(path: &str) -> String {
     if path.starts_with("sqlite:") { path.to_string() } else { format!("sqlite://{path}") }
 }
 
-async fn load_or_initialize_settings(storage: &Storage, config: &RootConfig) -> Result<AppSettingsDto> {
+async fn load_or_initialize_settings(
+    storage: &Storage,
+    config: &RootConfig,
+) -> Result<AppSettingsDto> {
     if let Some(settings) = storage.load_settings().await? {
         return Ok(settings);
     }
@@ -883,7 +1026,7 @@ async fn load_or_initialize_settings(storage: &Storage, config: &RootConfig) -> 
     let settings = AppSettingsDto {
         retention_days: config.storage.retention_days,
         transcript_storage_enabled: true,
-        auto_start_cloud: config.app.auto_start,
+        auto_start_cloud: config.app.auto_start_cloud,
         default_mode: config.app.mode,
     };
     storage.save_settings(&settings).await?;
@@ -909,10 +1052,101 @@ fn render_session_markdown(session: &SessionDetailDto) -> String {
     }
     markdown.push_str("\n## Assistant Events\n\n");
     for event in &session.assistant_events {
-        markdown.push_str(&format!(
-            "- {} ({:.2}): {}\n",
-            event.kind, event.confidence, event.content
-        ));
+        markdown
+            .push_str(&format!("- {} ({:.2}): {}\n", event.kind, event.confidence, event.content));
     }
     markdown
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn capture_section() -> CaptureSection {
+        CaptureSection {
+            source: "mock".to_string(),
+            frame_ms: 20,
+            sample_rate_hz: 16_000,
+            channels: 1,
+            silence_threshold: 0.008,
+            chunk_ms: 200,
+            speech_hold_ms: 1_200,
+            idle_timeout_ms: 5_000,
+        }
+    }
+
+    fn chunk(start_ms: u64, end_ms: u64, speech_likely: bool) -> AudioChunk {
+        AudioChunk {
+            start_ms,
+            end_ms,
+            samples: vec![0.0; 3200],
+            energy: if speech_likely { 0.05 } else { 0.0 },
+            speech_likely,
+        }
+    }
+
+    #[test]
+    fn upload_gate_skips_initial_silence_and_auto_pauses_after_idle_timeout() {
+        let mut gate =
+            UploadGate::new(&CaptureSection { idle_timeout_ms: 1_000, ..capture_section() });
+
+        assert!(!gate.evaluate(&chunk(0, 200, false), false));
+        assert!(!gate.upload_active);
+        assert!(!gate.auto_paused);
+
+        assert!(!gate.evaluate(&chunk(800, 1_000, false), false));
+        assert!(gate.auto_paused);
+        assert!(!gate.upload_active);
+    }
+
+    #[test]
+    fn upload_gate_keeps_short_silence_after_speech_but_stops_long_idle_uploads() {
+        let mut gate = UploadGate::new(&CaptureSection {
+            speech_hold_ms: 300,
+            idle_timeout_ms: 1_000,
+            ..capture_section()
+        });
+
+        assert!(gate.evaluate(&chunk(0, 200, true), false));
+        assert!(gate.upload_active);
+        assert!(!gate.auto_paused);
+
+        assert!(gate.evaluate(&chunk(250, 450, false), false));
+        assert!(gate.upload_active);
+
+        assert!(!gate.evaluate(&chunk(1_300, 1_500, false), false));
+        assert!(gate.auto_paused);
+        assert!(!gate.upload_active);
+    }
+
+    #[test]
+    fn upload_gate_resumes_when_speech_returns_after_idle_auto_pause() {
+        let mut gate =
+            UploadGate::new(&CaptureSection { idle_timeout_ms: 1_000, ..capture_section() });
+
+        assert!(!gate.evaluate(&chunk(0, 1_000, false), false));
+        assert!(gate.auto_paused);
+
+        assert!(gate.evaluate(&chunk(1_000, 1_200, true), false));
+        assert!(gate.upload_active);
+        assert!(!gate.auto_paused);
+    }
+
+    #[test]
+    fn effective_status_prefers_manual_and_idle_pause_messages() {
+        let mut snapshot = BackendStatusSnapshot {
+            stt_provider: Some("elevenlabs_scribe_realtime".to_string()),
+            ..BackendStatusSnapshot::default()
+        };
+
+        snapshot.cloud_pause = true;
+        assert_eq!(effective_stt_status(&snapshot), "cloud processing paused manually");
+
+        snapshot.cloud_pause = false;
+        snapshot.cloud_auto_pause = true;
+        assert_eq!(
+            effective_stt_status(&snapshot),
+            "idle auto-pause active; waiting for speech to resume uploads"
+        );
+    }
 }

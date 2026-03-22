@@ -1,6 +1,7 @@
 [app]
 mode = "ManualQa"
 auto_start = true
+auto_start_cloud = false
 http_bind = "127.0.0.1:8765"
 simulate_transcriber = false
 
@@ -11,6 +12,8 @@ sample_rate_hz = 16000
 channels = 1
 silence_threshold = 0.008
 chunk_ms = 200
+speech_hold_ms = 1200
+idle_timeout_ms = 5000
 
 [storage]
 database_path = "./soundmind.db"

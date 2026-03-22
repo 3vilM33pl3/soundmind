@@ -73,7 +73,7 @@ impl Default for AppSettingsDto {
         Self {
             retention_days: 0,
             transcript_storage_enabled: true,
-            auto_start_cloud: true,
+            auto_start_cloud: false,
             default_mode: AppMode::ManualQa,
         }
     }
@@ -113,6 +113,7 @@ pub struct BackendStatusSnapshot {
     pub mode: AppMode,
     pub capture_state: CaptureState,
     pub cloud_state: CloudState,
+    pub audio_upload_active: bool,
     pub current_sink: Option<String>,
     pub current_monitor_source: Option<String>,
     pub stt_provider: Option<String>,
@@ -124,6 +125,7 @@ pub struct BackendStatusSnapshot {
     pub recent_errors: Vec<String>,
     pub privacy_pause: bool,
     pub cloud_pause: bool,
+    pub cloud_auto_pause: bool,
 }
 
 impl Default for BackendStatusSnapshot {
@@ -132,6 +134,7 @@ impl Default for BackendStatusSnapshot {
             mode: AppMode::ManualQa,
             capture_state: CaptureState::Idle,
             cloud_state: CloudState::Off,
+            audio_upload_active: false,
             current_sink: None,
             current_monitor_source: None,
             stt_provider: None,
@@ -143,6 +146,7 @@ impl Default for BackendStatusSnapshot {
             recent_errors: Vec::new(),
             privacy_pause: false,
             cloud_pause: false,
+            cloud_auto_pause: false,
         }
     }
 }
