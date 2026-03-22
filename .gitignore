@@ -1,5 +1,6 @@
 /.mem
 /target
+/dist
 *.db
 .env
 config.toml

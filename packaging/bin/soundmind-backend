@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+export SOUNDMIND_CONFIG="${SOUNDMIND_CONFIG:-${CONFIG_HOME}/soundmind/config.toml}"
+export SOUNDMIND_KEYS_ENV="${SOUNDMIND_KEYS_ENV:-${CONFIG_HOME}/soundmind/keys.env}"
+
+cd /usr/lib/soundmind
+exec /usr/lib/soundmind/app_backend "$@"

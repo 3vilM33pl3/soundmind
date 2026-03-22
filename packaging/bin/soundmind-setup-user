@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+CONFIG_DIR="${CONFIG_HOME}/soundmind"
+SHARE_DIR="/usr/share/soundmind"
+
+mkdir -p "$CONFIG_DIR"
+
+if [[ ! -f "${CONFIG_DIR}/config.toml" ]]; then
+  cp "${SHARE_DIR}/config.example.toml" "${CONFIG_DIR}/config.toml"
+fi
+
+if [[ ! -f "${CONFIG_DIR}/keys.env" ]]; then
+  cat > "${CONFIG_DIR}/keys.env" <<'EOF'
+OPENAI_API_KEY=
+ELEVENLABS_API_KEY=
+EOF
+  chmod 0600 "${CONFIG_DIR}/keys.env"
+fi
+
+systemctl --user daemon-reload
+systemctl --user enable --now soundmind-backend.service
+
+cat <<EOF
+Prepared ${CONFIG_DIR} and enabled soundmind-backend.service for the current user.
+
+Next steps:
+  1. Edit ${CONFIG_DIR}/keys.env
+  2. Review ${CONFIG_DIR}/config.toml if needed
+  3. Launch the desktop UI with: soundmind
+EOF

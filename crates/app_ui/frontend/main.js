@@ -1,6 +1,6 @@
 const DEFAULT_BACKEND_URL = "http://127.0.0.1:8765";
 const backendUrl = window.localStorage.getItem("soundmind.backendUrl") || DEFAULT_BACKEND_URL;
-const APP_VERSION = window.SOUNDMIND_VERSION || "0.1.0";
+const APP_VERSION = window.SOUNDMIND_VERSION || "0.2.0";
 
 const state = {
   snapshot: null,
