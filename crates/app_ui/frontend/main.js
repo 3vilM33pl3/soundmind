@@ -36,6 +36,8 @@ const els = {
   sessionId: document.querySelector("#session-id"),
   privacyPause: document.querySelector("#privacy-pause"),
   cloudPause: document.querySelector("#cloud-pause"),
+  cloudAutoPause: document.querySelector("#cloud-auto-pause"),
+  audioUploadActive: document.querySelector("#audio-upload-active"),
   privacyCapture: document.querySelector("#privacy-capture"),
   privacyCloud: document.querySelector("#privacy-cloud"),
   privacyStorage: document.querySelector("#privacy-storage"),
@@ -142,12 +144,18 @@ function renderSnapshot(snapshot) {
   els.sessionId.textContent = snapshot.session_id || "not started";
   els.privacyPause.textContent = String(snapshot.privacy_pause);
   els.cloudPause.textContent = String(snapshot.cloud_pause);
+  els.cloudAutoPause.textContent = String(snapshot.cloud_auto_pause);
+  els.audioUploadActive.textContent = String(snapshot.audio_upload_active);
   els.privacyCapture.textContent = snapshot.privacy_pause
     ? "Local capture paused before transcript leaves the machine."
     : "System-audio monitor capture is active.";
   els.privacyCloud.textContent = snapshot.cloud_pause
-    ? "Cloud processing is paused."
-    : `${snapshot.cloud_state} via ${snapshot.stt_provider || "unknown provider"}.`;
+    ? "Cloud processing is paused manually."
+    : snapshot.cloud_auto_pause
+      ? "Cloud upload is auto-paused because no recent speech was detected."
+      : snapshot.audio_upload_active
+        ? `Audio is currently uploading to ${snapshot.stt_provider || "the STT provider"}.`
+        : `Connected to ${snapshot.stt_provider || "the STT provider"}, but silence is not being uploaded.`;
   els.privacyBackend.textContent = backendUrl;
   renderQuestionBanner(snapshot.detected_question);
 
@@ -220,7 +228,8 @@ function renderSettings(settings) {
       ? "Transcripts are stored locally with no automatic expiry."
       : `Transcripts are stored locally for ${settings.retention_days} days.`
     : "Transcript storage is disabled for new segments.";
-  els.settingsNote.textContent = "Settings loaded from the local SQLite store.";
+  els.settingsNote.textContent =
+    "Settings loaded from the local SQLite store. Automatic cloud resume is off by default.";
 }
 
 function renderSessions() {

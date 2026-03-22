@@ -129,15 +129,15 @@ fn render(
             "Monitor source: {}",
             snapshot.current_monitor_source.clone().unwrap_or_else(|| "unknown".to_string())
         ),
+        format!("STT: {}", snapshot.stt_provider.clone().unwrap_or_else(|| "unknown".to_string())),
+        format!("STT status: {}", snapshot.stt_status.clone().unwrap_or_else(|| "-".to_string())),
         format!(
-            "STT: {}",
-            snapshot.stt_provider.clone().unwrap_or_else(|| "unknown".to_string())
+            "Privacy pause: {}  Cloud pause: {}  Idle auto-pause: {}  Uploading: {}",
+            snapshot.privacy_pause,
+            snapshot.cloud_pause,
+            snapshot.cloud_auto_pause,
+            snapshot.audio_upload_active
         ),
-        format!(
-            "STT status: {}",
-            snapshot.stt_status.clone().unwrap_or_else(|| "-".to_string())
-        ),
-        format!("Privacy pause: {}  Cloud pause: {}", snapshot.privacy_pause, snapshot.cloud_pause),
         format!(
             "Session: {}",
             snapshot

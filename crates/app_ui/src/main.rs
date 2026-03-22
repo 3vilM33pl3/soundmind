@@ -94,18 +94,35 @@ where
 }
 
 fn install_tray(app: &mut App<tauri::Wry>) -> Result<()> {
-    let show_window = MenuItem::with_id(app, "show-window", "Show Window", true, Some("Ctrl+Alt+Shift+M"))?;
+    let show_window =
+        MenuItem::with_id(app, "show-window", "Show Window", true, Some("Ctrl+Alt+Shift+M"))?;
     let hide_window = MenuItem::with_id(app, "hide-window", "Hide Window", true, None::<&str>)?;
-    let start_capture = MenuItem::with_id(app, "start-capture", "Start Capture", true, None::<&str>)?;
+    let start_capture =
+        MenuItem::with_id(app, "start-capture", "Start Capture", true, None::<&str>)?;
     let stop_capture = MenuItem::with_id(app, "stop-capture", "Stop Capture", true, None::<&str>)?;
     let pause_cloud = MenuItem::with_id(app, "pause-cloud", "Pause Cloud", true, None::<&str>)?;
     let resume_cloud = MenuItem::with_id(app, "resume-cloud", "Resume Cloud", true, None::<&str>)?;
-    let answer_question =
-        MenuItem::with_id(app, "answer-question", "Answer Last Question", true, Some("Ctrl+Alt+Shift+A"))?;
-    let summarise_minute =
-        MenuItem::with_id(app, "summarise-minute", "Summarise Last Minute", true, Some("Ctrl+Alt+Shift+S"))?;
-    let comment_topic =
-        MenuItem::with_id(app, "comment-topic", "Comment Current Topic", true, Some("Ctrl+Alt+Shift+C"))?;
+    let answer_question = MenuItem::with_id(
+        app,
+        "answer-question",
+        "Answer Last Question",
+        true,
+        Some("Ctrl+Alt+Shift+A"),
+    )?;
+    let summarise_minute = MenuItem::with_id(
+        app,
+        "summarise-minute",
+        "Summarise Last Minute",
+        true,
+        Some("Ctrl+Alt+Shift+S"),
+    )?;
+    let comment_topic = MenuItem::with_id(
+        app,
+        "comment-topic",
+        "Comment Current Topic",
+        true,
+        Some("Ctrl+Alt+Shift+C"),
+    )?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit_app = MenuItem::with_id(app, "quit-app", "Quit Soundmind", true, None::<&str>)?;
 
