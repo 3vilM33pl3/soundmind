@@ -4,6 +4,7 @@ const backendUrl = window.localStorage.getItem("soundmind.backendUrl") || DEFAUL
 const state = {
   snapshot: null,
   settings: null,
+  transcriptSelection: null,
   primingDocuments: [],
   sessions: [],
   selectedSessionId: null,
@@ -23,7 +24,11 @@ const els = {
   partialBox: document.querySelector("#partial-box"),
   segmentList: document.querySelector("#segment-list"),
   assistantCard: document.querySelector("#assistant-card"),
-  answerQuestionButton: document.querySelector("#answer-question-button"),
+  actionAnswerButton: document.querySelector("#action-answer-button"),
+  actionSummaryButton: document.querySelector("#action-summary-button"),
+  actionCommentButton: document.querySelector("#action-comment-button"),
+  clearSelectionButton: document.querySelector("#clear-selection-button"),
+  selectionStatus: document.querySelector("#selection-status"),
   errorList: document.querySelector("#error-list"),
   settingsMode: document.querySelector("#settings-mode"),
   retentionDays: document.querySelector("#retention-days"),
@@ -226,7 +231,6 @@ function renderSnapshot(snapshot) {
   if (snapshot.transcript.segments.length === 0) {
     els.segmentList.innerHTML = `<div class="empty-state">No transcript segments committed yet.</div>`;
   } else {
-    const detectedQuestionId = snapshot.detected_question?.id || null;
     const paragraphs = buildTranscriptParagraphs(snapshot.transcript.segments.slice(-40));
     els.segmentList.innerHTML = paragraphs
       .map(
@@ -235,15 +239,24 @@ function renderSnapshot(snapshot) {
             ${paragraph
               .map((segment) => {
                 const classes = ["transcript-fragment"];
-                if (segment.id === detectedQuestionId) {
+                if (segment.is_question_candidate) {
                   classes.push("transcript-question");
                 }
-                return `<span class="${classes.join(" ")}">${escapeHtml(segment.text)}</span>`;
+                const questionButton = segment.is_question_candidate
+                  ? `<button class="question-inline-button secondary" data-question-segment-id="${segment.id}" title="Answer this question">?</button>`
+                  : "";
+                return `
+                  <span class="transcript-fragment-line">
+                    <span class="${classes.join(" ")}" data-segment-id="${segment.id}">${escapeHtml(segment.text)}</span>
+                    ${questionButton}
+                  </span>
+                `;
               })
               .join(" ")}
           </p>`,
       )
       .join("");
+    bindTranscriptInteractions();
   }
 
   if (snapshot.latest_assistant) {
@@ -268,6 +281,8 @@ function renderSnapshot(snapshot) {
       .map((error) => `<div class="error-item">${escapeHtml(error)}</div>`)
       .join("");
   }
+
+  renderSelectionState();
 }
 
 function renderAssistantContent(content) {
@@ -292,6 +307,112 @@ function renderAssistantContent(content) {
   }
 
   return lines.map((line) => `<p>${escapeHtml(line)}</p>`).join("");
+}
+
+function bindTranscriptInteractions() {
+  document.querySelectorAll("[data-question-segment-id]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const segmentId = button.dataset.questionSegmentId;
+      if (!segmentId) {
+        return;
+      }
+
+      try {
+        await runWithButtonFeedback(
+          button,
+          async () => {
+            await sendAction({ AnswerQuestionBySegment: { segment_id: segmentId } });
+            const snapshot = await fetchHealth();
+            renderSnapshot(snapshot);
+          },
+          { pending: "Answering...", success: "Answer Ready", error: "Answer Failed" },
+        );
+      } catch (error) {
+        renderDisconnected(error);
+      }
+    });
+  });
+}
+
+function updateTranscriptSelection() {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+    state.transcriptSelection = null;
+    renderSelectionState();
+    return;
+  }
+
+  const range = selection.getRangeAt(0);
+  if (!selectionIsInsideTranscript(range)) {
+    state.transcriptSelection = null;
+    renderSelectionState();
+    return;
+  }
+
+  const selectedText = selection.toString().trim();
+  if (!selectedText) {
+    state.transcriptSelection = null;
+    renderSelectionState();
+    return;
+  }
+
+  const segmentIds = Array.from(document.querySelectorAll("[data-segment-id]"))
+    .filter((element) => range.intersectsNode(element))
+    .map((element) => element.dataset.segmentId)
+    .filter((segmentId) => Boolean(segmentId));
+
+  if (!segmentIds.length) {
+    state.transcriptSelection = null;
+    renderSelectionState();
+    return;
+  }
+
+  state.transcriptSelection = { selected_text: selectedText, segment_ids: [...new Set(segmentIds)] };
+  renderSelectionState();
+}
+
+function selectionIsInsideTranscript(range) {
+  const container = els.segmentList;
+  if (!container) {
+    return false;
+  }
+
+  const commonAncestor = range.commonAncestorContainer;
+  return commonAncestor instanceof Element
+    ? container.contains(commonAncestor)
+    : container.contains(commonAncestor.parentElement);
+}
+
+function renderSelectionState() {
+  const selection = state.transcriptSelection;
+  if (!selection) {
+    els.selectionStatus.className = "selection-status";
+    els.selectionStatus.textContent =
+      "No transcript selection. Actions use the latest detected question or recent transcript.";
+    els.clearSelectionButton.disabled = true;
+    els.actionAnswerButton.textContent =
+      state.snapshot?.detected_question ? "Answer Detected Question" : "Answer Last Question";
+    els.actionSummaryButton.textContent = "Summarize Recent";
+    els.actionCommentButton.textContent = "Comment on Topic";
+    return;
+  }
+
+  els.selectionStatus.className = "selection-status active";
+  els.selectionStatus.textContent =
+    `Selection active across ${selection.segment_ids.length} segment${selection.segment_ids.length === 1 ? "" : "s"}. Top actions now target the selected excerpt.`;
+  els.clearSelectionButton.disabled = false;
+  els.actionAnswerButton.textContent = "Answer Selection";
+  els.actionSummaryButton.textContent = "Summarize Selection";
+  els.actionCommentButton.textContent = "Comment on Selection";
+}
+
+function clearTranscriptSelection() {
+  const selection = window.getSelection();
+  if (selection) {
+    selection.removeAllRanges();
+  }
+  state.transcriptSelection = null;
+  renderSelectionState();
 }
 
 function buildTranscriptParagraphs(segments) {
@@ -332,7 +453,9 @@ function renderQuestionBanner(question) {
       <div class="question-label">Question status</div>
       <div class="question-body">No question detected right now.</div>
     `;
-    els.answerQuestionButton.textContent = "Answer Last Question";
+    if (!state.transcriptSelection) {
+      els.actionAnswerButton.textContent = "Answer Last Question";
+    }
     return;
   }
 
@@ -342,7 +465,9 @@ function renderQuestionBanner(question) {
     <div class="question-body">${escapeHtml(question.text)}</div>
     <div class="question-meta">${question.start_ms}-${question.end_ms} ms</div>
   `;
-  els.answerQuestionButton.textContent = "Answer Detected Question";
+  if (!state.transcriptSelection) {
+    els.actionAnswerButton.textContent = "Answer Detected Question";
+  }
 }
 
 function renderSettings(settings) {
@@ -706,9 +831,37 @@ function actionLabels(action) {
       return { pending: "Summarising...", success: "Summary Ready", error: "Summary Failed" };
     case "CommentCurrentTopic":
       return { pending: "Commenting...", success: "Comment Ready", error: "Comment Failed" };
+    case "AnswerSelection":
+      return { pending: "Answering...", success: "Answer Ready", error: "Answer Failed" };
+    case "SummariseSelection":
+      return { pending: "Summarizing...", success: "Summary Ready", error: "Summary Failed" };
+    case "CommentSelection":
+      return { pending: "Commenting...", success: "Comment Ready", error: "Comment Failed" };
     default:
       return { pending: "Working...", success: "Done", error: "Failed" };
   }
+}
+
+function resolvePrimaryAction(action) {
+  const selection = state.transcriptSelection;
+  if (!selection) {
+    return action;
+  }
+
+  switch (action) {
+    case "AnswerLastQuestion":
+      return { AnswerSelection: selection };
+    case "SummariseLastMinute":
+      return { SummariseSelection: selection };
+    case "CommentCurrentTopic":
+      return { CommentSelection: selection };
+    default:
+      return action;
+  }
+}
+
+function actionKey(action) {
+  return typeof action === "string" ? action : Object.keys(action)[0];
 }
 
 async function handleSettingsSave() {
@@ -775,10 +928,7 @@ async function handlePrimingUpload() {
   return true;
 }
 
-document.querySelectorAll("[data-action]").forEach((button, index) => {
-  if (index >= 2) {
-    button.classList.add("secondary");
-  }
+document.querySelectorAll(".hero-actions [data-action]").forEach((button) => {
   button.addEventListener("click", async () => {
     try {
       await runWithButtonFeedback(
@@ -794,6 +944,37 @@ document.querySelectorAll("[data-action]").forEach((button, index) => {
       renderDisconnected(error);
     }
   });
+});
+
+[
+  [els.actionAnswerButton, "AnswerLastQuestion"],
+  [els.actionSummaryButton, "SummariseLastMinute"],
+  [els.actionCommentButton, "CommentCurrentTopic"],
+].forEach(([button, defaultAction]) => {
+  button.addEventListener("click", async () => {
+    const action = resolvePrimaryAction(defaultAction);
+    try {
+      await runWithButtonFeedback(
+        button,
+        async () => {
+          await sendAction(action);
+          const snapshot = await fetchHealth();
+          renderSnapshot(snapshot);
+        },
+        actionLabels(actionKey(action)),
+      );
+    } catch (error) {
+      renderDisconnected(error);
+    }
+  });
+});
+
+els.clearSelectionButton.addEventListener("click", () => {
+  clearTranscriptSelection();
+});
+
+document.addEventListener("selectionchange", () => {
+  updateTranscriptSelection();
 });
 
 els.saveSettings.addEventListener("click", async () => {
