@@ -44,12 +44,19 @@ pub struct TranscriptSegmentDto {
     pub text: String,
     pub source: String,
     pub created_at: DateTime<Utc>,
+    pub is_question_candidate: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TranscriptSnapshot {
     pub partial_text: Option<String>,
     pub segments: Vec<TranscriptSegmentDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TranscriptSelectionPayload {
+    pub selected_text: String,
+    pub segment_ids: Vec<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -174,7 +181,11 @@ pub enum UserAction {
     PauseCloud,
     ResumeCloud,
     AnswerLastQuestion,
+    AnswerQuestionBySegment { segment_id: Uuid },
+    AnswerSelection(TranscriptSelectionPayload),
     SummariseLastMinute,
+    SummariseSelection(TranscriptSelectionPayload),
     CommentCurrentTopic,
+    CommentSelection(TranscriptSelectionPayload),
     SetMode(AppMode),
 }

@@ -23,6 +23,7 @@ pub struct PrimingDocumentInput {
 pub struct AssistantContextInput {
     pub instruction: String,
     pub priming_documents: Vec<PrimingDocumentInput>,
+    pub focus_excerpt: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -142,11 +143,17 @@ fn build_prompt(
     };
 
     let priming = render_priming_documents(&context.priming_documents);
+    let focus_excerpt = context
+        .focus_excerpt
+        .as_ref()
+        .map(|focus| format!("\n\nSelected focus excerpt:\n{focus}"))
+        .unwrap_or_default();
 
     format!(
-        "Primary assistant instruction:\n{}\n\nPriming documents:\n{}\n\nTask:\n{instruction}\nReturn strict JSON with mode, should_respond, answer, and confidence.\nFormat answer as plain text bullets when useful, using '-' prefixes and short lines. Optimize for fast reading during a live interview. Ground your response in the transcript and uploaded documents. Do not invent credentials, experience, or facts not supported by the provided context.\nTranscript:\n{rendered}",
+        "Primary assistant instruction:\n{}\n\nPriming documents:\n{}{}\n\nTask:\n{instruction}\nReturn strict JSON with mode, should_respond, answer, and confidence.\nFormat answer as plain text bullets when useful, using '-' prefixes and short lines. Optimize for fast reading during a live interview. If a selected focus excerpt is provided, prioritize it while still using nearby transcript context. Ground your response in the transcript and uploaded documents. Do not invent credentials, experience, or facts not supported by the provided context.\nTranscript:\n{rendered}",
         context.instruction,
         priming,
+        focus_excerpt,
     )
 }
 

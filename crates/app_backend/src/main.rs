@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -20,7 +21,8 @@ use dotenvy::from_filename_override;
 use ipc_schema::{
     AppMode, AppSettingsDto, AssistantKind, AssistantOutput, BackendStatusSnapshot,
     CaptureState, CloudState, PrimingDocumentDto, SessionDetailDto, SessionSummaryDto,
-    TranscriptSegmentDto, TranscriptSnapshot, UserAction, default_assistant_instruction,
+    TranscriptSegmentDto, TranscriptSelectionPayload, TranscriptSnapshot, UserAction,
+    default_assistant_instruction,
 };
 use llm_openai::{
     AssistantContextInput, OpenAiConfig, OpenAiReasoner, PrimingDocumentInput, ResponseMode,
@@ -35,7 +37,7 @@ use tokio::process::Command;
 use tokio::sync::{RwLock, mpsc};
 use tower_http::cors::CorsLayer;
 use tracing::{error, info, warn};
-use transcript_core::{TranscriptSegment, TranscriptState};
+use transcript_core::{TranscriptSegment, TranscriptState, is_question_candidate};
 use uuid::Uuid;
 
 const MAX_HEALTH_SEGMENTS: usize = 48;
@@ -583,6 +585,7 @@ async fn handle_action(
     policy: &mut PolicyState,
     upload_gate: &mut UploadGate,
 ) -> Result<()> {
+    let audit_event = format!("user_action:{action:?}");
     match action {
         UserAction::Start => {
             let mut locked = snapshot.write().await;
@@ -621,6 +624,45 @@ async fn handle_action(
                 ResponseMode::AnswerQuestion,
                 "answer",
                 last_question,
+                None,
+                session_id,
+                snapshot,
+                storage,
+                settings,
+                openai,
+                policy,
+                true,
+            )
+            .await?;
+            if generated {
+                policy.mark_response_sent(Utc::now());
+            }
+        }
+        UserAction::AnswerQuestionBySegment { segment_id } => {
+            let generated = maybe_generate_response(
+                ResponseMode::AnswerQuestion,
+                "answer",
+                transcript_window_for_segment_ids(transcript, &[segment_id]),
+                selection_focus_excerpt(transcript, &[segment_id], None),
+                session_id,
+                snapshot,
+                storage,
+                settings,
+                openai,
+                policy,
+                true,
+            )
+            .await?;
+            if generated {
+                policy.mark_response_sent(Utc::now());
+            }
+        }
+        UserAction::AnswerSelection(selection) => {
+            let generated = maybe_generate_response(
+                ResponseMode::AnswerQuestion,
+                "answer",
+                transcript_window_for_selection(transcript, &selection),
+                selection_focus_excerpt(transcript, &selection.segment_ids, Some(&selection.selected_text)),
                 session_id,
                 snapshot,
                 storage,
@@ -639,6 +681,26 @@ async fn handle_action(
                 ResponseMode::SummariseRecent,
                 "summary",
                 recent_transcript_window(transcript, 60),
+                None,
+                session_id,
+                snapshot,
+                storage,
+                settings,
+                openai,
+                policy,
+                true,
+            )
+            .await?;
+            if generated {
+                policy.mark_response_sent(Utc::now());
+            }
+        }
+        UserAction::SummariseSelection(selection) => {
+            let generated = maybe_generate_response(
+                ResponseMode::SummariseRecent,
+                "summary",
+                transcript_window_for_selection(transcript, &selection),
+                selection_focus_excerpt(transcript, &selection.segment_ids, Some(&selection.selected_text)),
                 session_id,
                 snapshot,
                 storage,
@@ -657,6 +719,26 @@ async fn handle_action(
                 ResponseMode::Commentary,
                 "commentary",
                 transcript.last_n_segments(6),
+                None,
+                session_id,
+                snapshot,
+                storage,
+                settings,
+                openai,
+                policy,
+                true,
+            )
+            .await?;
+            if generated {
+                policy.mark_response_sent(Utc::now());
+            }
+        }
+        UserAction::CommentSelection(selection) => {
+            let generated = maybe_generate_response(
+                ResponseMode::Commentary,
+                "commentary",
+                transcript_window_for_selection(transcript, &selection),
+                selection_focus_excerpt(transcript, &selection.segment_ids, Some(&selection.selected_text)),
                 session_id,
                 snapshot,
                 storage,
@@ -673,7 +755,7 @@ async fn handle_action(
     }
 
     sync_upload_state(snapshot, upload_gate).await;
-    storage.append_audit_event(Some(session_id), &format!("user_action:{action:?}")).await?;
+    storage.append_audit_event(Some(session_id), &audit_event).await?;
     Ok(())
 }
 
@@ -681,6 +763,7 @@ async fn maybe_generate_response(
     mode: ResponseMode,
     kind: &str,
     window: Vec<TranscriptSegment>,
+    focus_excerpt: Option<String>,
     session_id: Uuid,
     snapshot: &Arc<RwLock<BackendStatusSnapshot>>,
     storage: &Storage,
@@ -718,7 +801,7 @@ async fn maybe_generate_response(
     }
 
     snapshot.write().await.cloud_state = CloudState::LlmActive;
-    let assistant_context = build_assistant_context(settings, storage).await?;
+    let assistant_context = build_assistant_context(settings, storage, focus_excerpt).await?;
     let response = openai.respond(mode, &window, &assistant_context).await?;
 
     if !response.should_respond {
@@ -782,6 +865,7 @@ async fn maybe_auto_generate_assistant(
                 ResponseMode::AnswerQuestion,
                 "answer",
                 vec![question.clone()],
+                Some(question.text.clone()),
                 session_id,
                 snapshot,
                 storage,
@@ -805,6 +889,7 @@ async fn maybe_auto_generate_assistant(
             ResponseMode::SummariseRecent,
             "summary",
             recent_window,
+            None,
             session_id,
             snapshot,
             storage,
@@ -826,6 +911,7 @@ async fn maybe_auto_generate_assistant(
 async fn build_assistant_context(
     settings: &Arc<RwLock<AppSettingsDto>>,
     storage: &Storage,
+    focus_excerpt: Option<String>,
 ) -> Result<AssistantContextInput> {
     let instruction = {
         let settings = settings.read().await;
@@ -846,7 +932,7 @@ async fn build_assistant_context(
         })
         .collect();
 
-    Ok(AssistantContextInput { instruction, priming_documents })
+    Ok(AssistantContextInput { instruction, priming_documents, focus_excerpt })
 }
 
 async fn refresh_snapshot(
@@ -862,6 +948,7 @@ async fn refresh_snapshot(
 }
 
 fn to_dto(segment: TranscriptSegment) -> TranscriptSegmentDto {
+    let is_question = is_question_candidate(&segment.text);
     TranscriptSegmentDto {
         id: segment.id,
         session_id: segment.session_id,
@@ -870,7 +957,59 @@ fn to_dto(segment: TranscriptSegment) -> TranscriptSegmentDto {
         text: segment.text,
         source: segment.source,
         created_at: segment.created_at,
+        is_question_candidate: is_question,
     }
+}
+
+fn selection_focus_excerpt(
+    transcript: &TranscriptState,
+    segment_ids: &[Uuid],
+    selected_text: Option<&str>,
+) -> Option<String> {
+    let explicit = selected_text.map(str::trim).filter(|text| !text.is_empty());
+    if let Some(explicit) = explicit {
+        return Some(explicit.to_string());
+    }
+
+    let mut segments = transcript_window_for_segment_ids(transcript, segment_ids);
+    if segments.len() == 1 {
+        return segments.pop().map(|segment| segment.text);
+    }
+
+    None
+}
+
+fn transcript_window_for_selection(
+    transcript: &TranscriptState,
+    selection: &TranscriptSelectionPayload,
+) -> Vec<TranscriptSegment> {
+    transcript_window_for_segment_ids(transcript, &selection.segment_ids)
+}
+
+fn transcript_window_for_segment_ids(
+    transcript: &TranscriptState,
+    segment_ids: &[Uuid],
+) -> Vec<TranscriptSegment> {
+    let committed = transcript.segments();
+    if committed.is_empty() || segment_ids.is_empty() {
+        return Vec::new();
+    }
+
+    let mut included_indices = BTreeSet::new();
+    for (index, segment) in committed.iter().enumerate() {
+        if segment_ids.contains(&segment.id) {
+            let start = index.saturating_sub(1);
+            let end = (index + 1).min(committed.len().saturating_sub(1));
+            for context_index in start..=end {
+                included_indices.insert(context_index);
+            }
+        }
+    }
+
+    included_indices
+        .into_iter()
+        .filter_map(|index| committed.get(index).cloned())
+        .collect()
 }
 
 async fn push_error(snapshot: &Arc<RwLock<BackendStatusSnapshot>>, message: String) {
@@ -1375,6 +1514,7 @@ fn render_session_markdown(session: &SessionDetailDto) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use stt_scribe::{FinalTranscript, TranscriberEvent};
 
     fn capture_section() -> CaptureSection {
         CaptureSection {
@@ -1462,5 +1602,47 @@ mod tests {
             effective_stt_status(&snapshot),
             "idle auto-pause active; waiting for speech to resume uploads"
         );
+    }
+
+    fn transcript_with_segments(texts: &[&str]) -> TranscriptState {
+        let mut transcript = TranscriptState::default();
+        let session_id = Uuid::new_v4();
+
+        for (index, text) in texts.iter().enumerate() {
+            transcript.apply_event(
+                session_id,
+                TranscriberEvent::FinalTranscript(FinalTranscript {
+                    start_ms: (index as u64) * 1_000,
+                    end_ms: ((index as u64) + 1) * 1_000,
+                    text: (*text).to_string(),
+                    source: "test".to_string(),
+                }),
+            );
+        }
+
+        transcript
+    }
+
+    #[test]
+    fn segment_window_includes_one_segment_of_context_on_each_side() {
+        let transcript = transcript_with_segments(&["one", "two", "three", "four"]);
+        let target_segment_id = transcript.segments()[1].id;
+
+        let window = transcript_window_for_segment_ids(&transcript, &[target_segment_id]);
+        let texts = window.into_iter().map(|segment| segment.text).collect::<Vec<_>>();
+
+        assert_eq!(texts, vec!["one", "two", "three"]);
+    }
+
+    #[test]
+    fn selection_focus_uses_selected_text_when_present() {
+        let transcript = transcript_with_segments(&["Who are you?", "Tell me more"]);
+        let focus = selection_focus_excerpt(
+            &transcript,
+            &[transcript.segments()[0].id],
+            Some("Who are you"),
+        );
+
+        assert_eq!(focus.as_deref(), Some("Who are you"));
     }
 }

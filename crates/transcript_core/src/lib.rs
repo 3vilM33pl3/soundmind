@@ -59,7 +59,7 @@ impl TranscriptState {
     }
 
     pub fn last_question_candidate(&self) -> Option<TranscriptSegment> {
-        self.committed.iter().rev().find(|segment| looks_like_question(&segment.text)).cloned()
+        self.committed.iter().rev().find(|segment| is_question_candidate(&segment.text)).cloned()
     }
 
     fn commit_final(
@@ -93,7 +93,7 @@ impl TranscriptState {
     }
 }
 
-fn looks_like_question(text: &str) -> bool {
+pub fn is_question_candidate(text: &str) -> bool {
     let trimmed = text.trim();
     trimmed.ends_with('?')
         || ["who", "what", "when", "where", "why", "how", "can", "should"]
@@ -186,6 +186,7 @@ mod tests {
         );
 
         assert!(state.last_question_candidate().is_some());
+        assert!(is_question_candidate("Can someone explain this?"));
     }
 
     #[test]

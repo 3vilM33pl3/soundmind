@@ -10,7 +10,7 @@ use sqlx::{
     Row, SqlitePool,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
-use transcript_core::TranscriptSegment;
+use transcript_core::{TranscriptSegment, is_question_candidate};
 use uuid::Uuid;
 
 pub struct Storage {
@@ -431,14 +431,16 @@ fn row_to_session_summary(row: sqlx::sqlite::SqliteRow) -> Result<SessionSummary
 }
 
 fn row_to_transcript_segment(row: sqlx::sqlite::SqliteRow) -> Result<TranscriptSegmentDto> {
+    let text: String = row.try_get("text")?;
     Ok(TranscriptSegmentDto {
         id: Uuid::parse_str(&row.try_get::<String, _>("id")?)?,
         session_id: Uuid::parse_str(&row.try_get::<String, _>("session_id")?)?,
         start_ms: row.try_get::<i64, _>("start_ms")? as u64,
         end_ms: row.try_get::<i64, _>("end_ms")? as u64,
-        text: row.try_get("text")?,
+        text: text.clone(),
         source: row.try_get("source")?,
         created_at: parse_sqlite_datetime(&row.try_get::<String, _>("created_at")?)?,
+        is_question_candidate: is_question_candidate(&text),
     })
 }
 
