@@ -5,8 +5,6 @@ current output monitor, transcribes speech in near real time, detects likely
 questions, and lets you generate answers, summaries, and commentary while
 keeping session history and agent setup locally in SQLite.
 
-![Soundmind desktop UI](docs/assets/app-screenshot.png)
-
 ## What it does
 
 - Captures desktop audio through PulseAudio or PipeWire's Pulse compatibility
