@@ -722,7 +722,7 @@ textarea {
   font-size: 1.18rem;
   line-height: 1.82;
   text-wrap: pretty;
-  max-height: min(72vh, 980px);
+  height: 30rem;
   overflow-y: auto;
 }
 

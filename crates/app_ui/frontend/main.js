@@ -200,6 +200,7 @@ function classifyState(stateValue) {
 
 function renderSnapshot(snapshot) {
   state.snapshot = snapshot;
+  const transcriptScrollState = captureTranscriptScrollState();
 
   setChip(els.backendChip, "Backend: connected", "ok");
   setChip(els.captureChip, `Capture: ${snapshot.capture_state}`, classifyState(snapshot.capture_state));
@@ -237,7 +238,7 @@ function renderSnapshot(snapshot) {
   if (snapshot.transcript.segments.length === 0) {
     els.segmentList.innerHTML = `<div class="empty-state">No transcript segments committed yet.</div>`;
   } else {
-    const paragraphs = buildTranscriptParagraphs(snapshot.transcript.segments.slice(-40));
+    const paragraphs = buildTranscriptParagraphs(snapshot.transcript.segments);
     els.segmentList.innerHTML = paragraphs
       .map(
         (paragraph) => `
@@ -264,6 +265,7 @@ function renderSnapshot(snapshot) {
       .join("");
     bindTranscriptInteractions();
   }
+  restoreTranscriptScrollState(transcriptScrollState);
 
   if (snapshot.latest_assistant) {
     els.assistantCard.innerHTML = `
@@ -473,6 +475,34 @@ function buildTranscriptParagraphs(segments) {
   }
 
   return paragraphs;
+}
+
+function captureTranscriptScrollState() {
+  const container = els.segmentList;
+  if (!container) {
+    return null;
+  }
+
+  const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+  return {
+    scrollTop: container.scrollTop,
+    wasNearBottom: distanceFromBottom <= 24,
+  };
+}
+
+function restoreTranscriptScrollState(previousState) {
+  const container = els.segmentList;
+  if (!container || !previousState) {
+    return;
+  }
+
+  if (previousState.wasNearBottom) {
+    container.scrollTop = container.scrollHeight;
+    return;
+  }
+
+  const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+  container.scrollTop = Math.min(previousState.scrollTop, maxScrollTop);
 }
 
 function renderQuestionBanner(question) {
