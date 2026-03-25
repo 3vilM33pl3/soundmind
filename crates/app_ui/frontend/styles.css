@@ -335,6 +335,12 @@ h4 {
   margin-bottom: 18px;
 }
 
+.panel-head-actions {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+}
+
 .panel-head p {
   margin: 8px 0 0;
   color: var(--muted);

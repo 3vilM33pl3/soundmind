@@ -15,6 +15,7 @@ const state = {
   lastSettingsRefreshAt: 0,
   lastPrimingRefreshAt: 0,
   lastHistoryRefreshAt: 0,
+  restoredTranscriptSessionId: null,
 };
 
 const els = {
@@ -23,6 +24,8 @@ const els = {
   cloudChip: document.querySelector("#cloud-chip"),
   sttChip: document.querySelector("#stt-chip"),
   backendNote: document.querySelector("#backend-note"),
+  transcriptHint: document.querySelector("#transcript-hint"),
+  transcriptReturnLive: document.querySelector("#transcript-return-live"),
   questionBanner: document.querySelector("#question-banner"),
   partialBox: document.querySelector("#partial-box"),
   segmentList: document.querySelector("#segment-list"),
@@ -200,7 +203,6 @@ function classifyState(stateValue) {
 
 function renderSnapshot(snapshot) {
   state.snapshot = snapshot;
-  const transcriptScrollState = captureTranscriptScrollState();
 
   setChip(els.backendChip, "Backend: connected", "ok");
   setChip(els.captureChip, `Capture: ${snapshot.capture_state}`, classifyState(snapshot.capture_state));
@@ -233,39 +235,7 @@ function renderSnapshot(snapshot) {
         ? `Audio is currently uploading to ${snapshot.stt_provider || "the STT provider"}.`
         : `Connected to ${snapshot.stt_provider || "the STT provider"}, but silence is not being uploaded.`;
   els.privacyBackend.textContent = backendUrl;
-  renderQuestionBanner(snapshot.detected_question);
-
-  if (snapshot.transcript.segments.length === 0) {
-    els.segmentList.innerHTML = `<div class="empty-state">No transcript segments committed yet.</div>`;
-  } else {
-    const paragraphs = buildTranscriptParagraphs(snapshot.transcript.segments);
-    els.segmentList.innerHTML = paragraphs
-      .map(
-        (paragraph) => `
-          <p class="transcript-paragraph">
-            ${paragraph
-              .map((segment) => {
-                const classes = ["transcript-fragment"];
-                if (segment.is_question_candidate) {
-                  classes.push("transcript-question");
-                }
-                const questionButton = segment.is_question_candidate
-                  ? `<button class="question-inline-button secondary" data-question-segment-id="${segment.id}" title="Answer this question">?</button>`
-                  : "";
-                return `
-                  <span class="transcript-fragment-line">
-                    <span class="${classes.join(" ")}" data-segment-id="${segment.id}">${escapeHtml(segment.text)}</span>
-                    ${questionButton}
-                  </span>
-                `;
-              })
-              .join(" ")}
-          </p>`,
-      )
-      .join("");
-    bindTranscriptInteractions();
-  }
-  restoreTranscriptScrollState(transcriptScrollState);
+  renderTranscriptPanel();
 
   if (snapshot.latest_assistant) {
     els.assistantCard.innerHTML = `
@@ -345,6 +315,19 @@ function bindTranscriptInteractions() {
         return;
       }
 
+      if (isRestoredTranscriptView()) {
+        const segment = currentTranscriptSegments().find(
+          (candidate) => String(candidate.id) === String(segmentId),
+        );
+        if (!segment) {
+          return;
+        }
+        state.transcriptSelection = { selected_text: segment.text, segment_ids: [segment.id] };
+        state.stickyTranscriptSelection = state.transcriptSelection;
+        renderSelectionState();
+        return;
+      }
+
       try {
         await runWithButtonFeedback(
           button,
@@ -415,11 +398,32 @@ function selectionIsInsideTranscript(range) {
 
 function renderSelectionState() {
   const selection = state.transcriptSelection || state.stickyTranscriptSelection;
+  const restoredTranscript = isRestoredTranscriptView();
+
+  els.actionAnswerButton.disabled = restoredTranscript;
+  els.actionSummaryButton.disabled = restoredTranscript;
+  els.actionCommentButton.disabled = restoredTranscript;
+
+  if (restoredTranscript) {
+    els.actionAnswerButton.textContent = "Answer Last Question";
+    els.actionSummaryButton.textContent = "Summarize Recent";
+    els.actionCommentButton.textContent = "Comment on Topic";
+    els.selectionStatus.className = selection ? "selection-status active" : "selection-status";
+    els.selectionStatus.textContent = selection
+      ? "Selection active in restored session. Return to live transcript to run actions."
+      : "Viewing a stored session in the transcript panel. Return to live transcript to run actions.";
+    els.clearSelectionButton.disabled = !selection;
+    return;
+  }
+
   if (!selection) {
     els.selectionStatus.className = "selection-status";
     els.selectionStatus.textContent =
       "No transcript selection. Actions use the latest detected question or recent transcript.";
     els.clearSelectionButton.disabled = true;
+    els.actionAnswerButton.disabled = false;
+    els.actionSummaryButton.disabled = false;
+    els.actionCommentButton.disabled = false;
     els.actionAnswerButton.textContent =
       state.snapshot?.detected_question ? "Answer Detected Question" : "Answer Last Question";
     els.actionSummaryButton.textContent = "Summarize Recent";
@@ -431,6 +435,9 @@ function renderSelectionState() {
   els.selectionStatus.textContent =
     `Selection active across ${selection.segment_ids.length} segment${selection.segment_ids.length === 1 ? "" : "s"}. Top actions now target the selected excerpt.`;
   els.clearSelectionButton.disabled = false;
+  els.actionAnswerButton.disabled = false;
+  els.actionSummaryButton.disabled = false;
+  els.actionCommentButton.disabled = false;
   els.actionAnswerButton.textContent = "Answer Selection";
   els.actionSummaryButton.textContent = "Summarize Selection";
   els.actionCommentButton.textContent = "Comment on Selection";
@@ -477,6 +484,82 @@ function buildTranscriptParagraphs(segments) {
   return paragraphs;
 }
 
+function isRestoredTranscriptView() {
+  return Boolean(
+    state.restoredTranscriptSessionId &&
+      state.selectedSession &&
+      state.selectedSession.session.id === state.restoredTranscriptSessionId,
+  );
+}
+
+function currentTranscriptSegments() {
+  if (isRestoredTranscriptView()) {
+    return state.selectedSession?.transcript_segments || [];
+  }
+  return state.snapshot?.transcript?.segments || [];
+}
+
+function currentDetectedQuestion() {
+  if (isRestoredTranscriptView()) {
+    return [...currentTranscriptSegments()].reverse().find((segment) => segment.is_question_candidate) || null;
+  }
+  return state.snapshot?.detected_question || null;
+}
+
+function renderTranscriptPanel() {
+  const transcriptScrollState = captureTranscriptScrollState();
+  const restoredTranscript = isRestoredTranscriptView();
+  const segments = currentTranscriptSegments();
+  const questionButtonTitle = restoredTranscript ? "Select this question" : "Answer this question";
+
+  els.transcriptHint.textContent = restoredTranscript
+    ? "Viewing a stored session transcript. Scroll through it, click `?` to select a detected question, or return to the live transcript."
+    : "Scroll continuously, click `?` beside detected questions, or select text and use the action bar above.";
+  els.transcriptReturnLive.hidden = !restoredTranscript;
+  els.partialBox.textContent = restoredTranscript
+    ? `Stored session restored. ${segments.length} committed transcript segment${segments.length === 1 ? "" : "s"} available.`
+    : state.snapshot?.transcript?.partial_text || "No partial transcript yet.";
+
+  renderQuestionBanner(currentDetectedQuestion(), restoredTranscript);
+  renderSelectionState();
+
+  if (segments.length === 0) {
+    els.segmentList.innerHTML = `<div class="empty-state">${
+      restoredTranscript ? "No transcript segments were stored for this session." : "No transcript segments committed yet."
+    }</div>`;
+    restoreTranscriptScrollState(transcriptScrollState);
+    return;
+  }
+
+  const paragraphs = buildTranscriptParagraphs(segments);
+  els.segmentList.innerHTML = paragraphs
+    .map(
+      (paragraph) => `
+        <p class="transcript-paragraph">
+          ${paragraph
+            .map((segment) => {
+              const classes = ["transcript-fragment"];
+              if (segment.is_question_candidate) {
+                classes.push("transcript-question");
+              }
+              const questionButton = segment.is_question_candidate
+                ? `<button class="question-inline-button secondary" data-question-segment-id="${segment.id}" title="${questionButtonTitle}">?</button>`
+                : "";
+              return `
+                <span class="transcript-fragment-line">
+                  <span class="${classes.join(" ")}" data-segment-id="${segment.id}">${escapeHtml(segment.text)}</span>
+                  ${questionButton}
+                </span>
+              `;
+            })
+            .join(" ")}
+        </p>`,
+    )
+    .join("");
+  bindTranscriptInteractions();
+  restoreTranscriptScrollState(transcriptScrollState);
+}
+
 function captureTranscriptScrollState() {
   const container = els.segmentList;
   if (!container) {
@@ -505,7 +588,26 @@ function restoreTranscriptScrollState(previousState) {
   container.scrollTop = Math.min(previousState.scrollTop, maxScrollTop);
 }
 
-function renderQuestionBanner(question) {
+function renderQuestionBanner(question, restoredTranscript = false) {
+  if (restoredTranscript && !question) {
+    els.questionBanner.className = "question-banner question-banner-idle";
+    els.questionBanner.innerHTML = `
+      <div class="question-label">Stored session</div>
+      <div class="question-body">No detected question marker was stored for this session.</div>
+    `;
+    return;
+  }
+
+  if (restoredTranscript && question) {
+    els.questionBanner.className = "question-banner question-banner-detected";
+    els.questionBanner.innerHTML = `
+      <div class="question-label">Stored question</div>
+      <div class="question-body">${escapeHtml(question.text)}</div>
+      <div class="question-meta">${question.start_ms}-${question.end_ms} ms</div>
+    `;
+    return;
+  }
+
   if (!question) {
     els.questionBanner.className = "question-banner question-banner-idle";
     els.questionBanner.innerHTML = `
@@ -676,6 +778,7 @@ function renderSessionDetail() {
         <p>${escapeHtml(session.session.capture_device)} • ${escapeHtml(session.session.mode)}</p>
       </div>
       <div class="detail-actions">
+        <button id="restore-transcript" class="ghost">Restore in Transcript</button>
         <button id="export-json" class="ghost">Export JSON</button>
         <button id="export-markdown" class="ghost">Export Markdown</button>
         <button id="delete-session" class="secondary">Delete Session</button>
@@ -698,6 +801,12 @@ function renderSessionDetail() {
     </div>
   `;
 
+  document.querySelector("#restore-transcript")?.addEventListener("click", () => {
+    state.restoredTranscriptSessionId = session.session.id;
+    clearTranscriptSelection();
+    renderTranscriptPanel();
+    els.segmentList.scrollTop = 0;
+  });
   document.querySelector("#export-json")?.addEventListener("click", async () => {
     const button = document.querySelector("#export-json");
     try {
@@ -801,6 +910,7 @@ async function selectSession(sessionId) {
   state.selectedSession = await fetchSessionDetail(sessionId);
   renderSessions();
   renderSessionDetail();
+  renderTranscriptPanel();
 }
 
 async function refreshHistory(force = false) {
@@ -829,6 +939,7 @@ async function refreshHistory(force = false) {
     state.selectedSession = null;
   }
   renderSessionDetail();
+  renderTranscriptPanel();
 }
 
 async function refreshSettings(force = false) {
@@ -1062,6 +1173,12 @@ els.clearSelectionButton.addEventListener("mousedown", (event) => {
 });
 els.clearSelectionButton.addEventListener("click", () => {
   clearTranscriptSelection();
+});
+
+els.transcriptReturnLive?.addEventListener("click", () => {
+  state.restoredTranscriptSessionId = null;
+  clearTranscriptSelection();
+  renderTranscriptPanel();
 });
 
 els.clearAllButton.addEventListener("mousedown", (event) => {

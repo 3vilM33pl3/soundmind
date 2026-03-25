@@ -82,7 +82,10 @@
             <section class="panel panel-transcript">
               <div class="panel-head">
                 <h2>Live Transcript</h2>
-                <p>Scroll continuously, click `?` beside detected questions, or select text and use the action bar above.</p>
+                <p id="transcript-hint">Scroll continuously, click `?` beside detected questions, or select text and use the action bar above.</p>
+                <div class="panel-head-actions">
+                  <button id="transcript-return-live" class="ghost" hidden>Return to Live</button>
+                </div>
               </div>
               <div class="question-banner question-banner-idle" id="question-banner">
                 <div class="question-label">Question status</div>
