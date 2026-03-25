@@ -244,19 +244,7 @@ function renderSnapshot(snapshot) {
   els.privacyBackend.textContent = backendUrl;
   renderTranscriptPanel();
 
-  if (snapshot.latest_assistant) {
-    els.assistantCard.innerHTML = `
-      <div class="assistant-meta">
-        ${escapeHtml(snapshot.latest_assistant.kind)} • ${formatTime(snapshot.latest_assistant.created_at)}
-      </div>
-      <div class="assistant-content">${renderAssistantContent(snapshot.latest_assistant.content, snapshot.latest_assistant.kind)}</div>
-    `;
-  } else {
-    els.assistantCard.innerHTML = `
-      <div class="assistant-meta">No assistant output yet.</div>
-      <div class="assistant-content">Trigger an action once transcript is available.</div>
-    `;
-  }
+  renderAssistantCard(snapshot);
 
   const recentErrors = snapshot.recent_errors.filter((error) => error.trim().length > 0);
   if (!recentErrors.length) {
@@ -304,6 +292,49 @@ function renderAssistantContent(content, kind = "Notice") {
   }
 
   return lines.map((line) => `<p>${escapeHtml(line)}</p>`).join("");
+}
+
+function renderAssistantCard(snapshot) {
+  const latestAssistant = snapshot.latest_assistant;
+  if (!latestAssistant) {
+    els.assistantCard.innerHTML = `
+      <div class="assistant-meta">No assistant output yet.</div>
+      <div class="assistant-content">Trigger an action once transcript is available.</div>
+    `;
+    return;
+  }
+
+  const questionContext = currentQuestionContextForAssistant(latestAssistant.kind);
+  const questionMarkup = questionContext
+    ? `
+      <div class="assistant-question">
+        <div class="assistant-question-label">Question</div>
+        <div class="assistant-question-text">${escapeHtml(questionContext)}</div>
+      </div>
+    `
+    : "";
+
+  els.assistantCard.innerHTML = `
+    <div class="assistant-meta">
+      ${escapeHtml(latestAssistant.kind)} • ${formatTime(latestAssistant.created_at)}
+    </div>
+    ${questionMarkup}
+    <div class="assistant-content">${renderAssistantContent(latestAssistant.content, latestAssistant.kind)}</div>
+  `;
+}
+
+function currentQuestionContextForAssistant(kind) {
+  if (kind !== "Answer") {
+    return null;
+  }
+
+  const selection = currentManualQuestionSelection() || state.transcriptSelection || state.stickyTranscriptSelection;
+  if (selection && selection.selected_text.trim()) {
+    return selection.selected_text.trim();
+  }
+
+  const detectedQuestion = currentDetectedQuestion();
+  return detectedQuestion?.text?.trim() || null;
 }
 
 function contentToBulletCandidates(lines) {
@@ -589,7 +620,7 @@ function renderTranscriptMarkup({ segments, partialText, restoredTranscript, man
               ${paragraph
                 .map((segment) => {
                   const classes = ["transcript-fragment"];
-                  const manualAnchorId = manualSelection?.segment_ids?.[0];
+                  const manualAnchorId = manualSelection?.segment_ids?.[manualSelection.segment_ids.length - 1];
                   const isManualQuestion = manualSelection?.segment_ids?.some(
                     (segmentId) => String(segmentId) === String(segment.id),
                   );
