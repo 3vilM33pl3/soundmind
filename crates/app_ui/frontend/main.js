@@ -2,6 +2,7 @@ const DEFAULT_BACKEND_URL = "http://127.0.0.1:8765";
 const backendUrl = window.localStorage.getItem("soundmind.backendUrl") || DEFAULT_BACKEND_URL;
 const APP_VERSION = window.SOUNDMIND_VERSION || "0.2.1";
 const THEME_STORAGE_KEY = "soundmind.theme";
+const RESTORED_TRANSCRIPT_SESSION_STORAGE_KEY = "soundmind.restoredTranscriptSessionId";
 
 const state = {
   snapshot: null,
@@ -15,7 +16,7 @@ const state = {
   lastSettingsRefreshAt: 0,
   lastPrimingRefreshAt: 0,
   lastHistoryRefreshAt: 0,
-  restoredTranscriptSessionId: null,
+  restoredTranscriptSessionId: window.localStorage.getItem(RESTORED_TRANSCRIPT_SESSION_STORAGE_KEY),
 };
 
 const els = {
@@ -848,6 +849,8 @@ function renderSessionDetail() {
           await deleteSession(session.session.id);
           state.selectedSessionId = null;
           state.selectedSession = null;
+          state.restoredTranscriptSessionId = null;
+          window.localStorage.removeItem(RESTORED_TRANSCRIPT_SESSION_STORAGE_KEY);
           await refreshHistory(true);
           els.settingsNote.textContent = "Session deleted.";
         },
@@ -911,6 +914,8 @@ function buildSettingsPayload() {
 async function selectSession(sessionId) {
   state.selectedSessionId = sessionId;
   state.selectedSession = await fetchSessionDetail(sessionId);
+  state.restoredTranscriptSessionId = sessionId;
+  window.localStorage.setItem(RESTORED_TRANSCRIPT_SESSION_STORAGE_KEY, sessionId);
   renderSessions();
   renderSessionDetail();
   renderTranscriptPanel();
@@ -924,9 +929,16 @@ async function refreshHistory(force = false) {
 
   state.sessions = await fetchSessions();
   state.lastHistoryRefreshAt = now;
-  if (!state.selectedSessionId && state.sessions.length) {
+  const restoredExists = state.restoredTranscriptSessionId
+    ? state.sessions.some((session) => session.id === state.restoredTranscriptSessionId)
+    : false;
+
+  if (state.restoredTranscriptSessionId && restoredExists) {
+    state.selectedSessionId = state.restoredTranscriptSessionId;
+  } else if (!state.selectedSessionId && state.sessions.length) {
     state.selectedSessionId = state.sessions[0].id;
   }
+
   renderSessions();
 
   if (state.selectedSessionId) {
@@ -1185,6 +1197,7 @@ els.clearSelectionButton.addEventListener("click", () => {
 
 els.transcriptReturnLive?.addEventListener("click", () => {
   state.restoredTranscriptSessionId = null;
+  window.localStorage.removeItem(RESTORED_TRANSCRIPT_SESSION_STORAGE_KEY);
   clearTranscriptSelection();
   renderTranscriptPanel();
 });
