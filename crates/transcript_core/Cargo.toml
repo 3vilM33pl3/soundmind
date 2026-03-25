@@ -6,5 +6,5 @@ license.workspace = true
 
 [dependencies]
 chrono.workspace = true
-stt_scribe = { path = "../stt_scribe" }
+stt_core = { path = "../stt_core" }
 uuid.workspace = true

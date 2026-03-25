@@ -6,9 +6,11 @@ members = [
   "crates/audio_pipeline",
   "crates/context_engine",
   "crates/ipc_schema",
+  "crates/llm_core",
   "crates/llm_openai",
   "crates/policy_engine",
   "crates/storage_sqlite",
+  "crates/stt_core",
   "crates/stt_scribe",
   "crates/transcript_core",
 ]

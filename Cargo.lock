@@ -67,11 +67,13 @@ dependencies = [
  "dirs",
  "dotenvy",
  "ipc_schema",
+ "llm_core",
  "llm_openai",
  "policy_engine",
  "serde",
  "serde_json",
  "storage_sqlite",
+ "stt_core",
  "stt_scribe",
  "tokio",
  "toml 0.9.12+spec-1.1.0",
@@ -2232,11 +2234,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
+name = "llm_core"
+version = "0.2.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "serde",
+ "transcript_core",
+]
+
+[[package]]
 name = "llm_openai"
 version = "0.2.1"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
+ "llm_core",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -4345,6 +4359,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
+name = "stt_core"
+version = "0.2.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "audio_pipeline",
+ "serde",
+]
+
+[[package]]
 name = "stt_scribe"
 version = "0.2.1"
 dependencies = [
@@ -4355,6 +4379,7 @@ dependencies = [
  "futures-util",
  "serde",
  "serde_json",
+ "stt_core",
  "tokio",
  "tokio-tungstenite",
  "tracing",
@@ -5154,7 +5179,7 @@ name = "transcript_core"
 version = "0.2.1"
 dependencies = [
  "chrono",
- "stt_scribe",
+ "stt_core",
  "uuid",
 ]
 

@@ -1,43 +1,19 @@
 use anyhow::{Context, Result, anyhow};
+use async_trait::async_trait;
 use chrono::Utc;
+use llm_core::{
+    AssistantContextInput, LlmProvider, LlmResponse, ModelCapability, ModelDescriptor,
+    ModelLocality, PrimingDocumentInput, ResponseMode,
+};
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use thiserror::Error;
 use transcript_core::TranscriptSegment;
-
-#[derive(Debug, Clone, Copy)]
-pub enum ResponseMode {
-    AnswerQuestion,
-    Commentary,
-    SummariseRecent,
-}
-
-#[derive(Debug, Clone)]
-pub struct PrimingDocumentInput {
-    pub file_name: String,
-    pub text: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct AssistantContextInput {
-    pub instruction: String,
-    pub priming_documents: Vec<PrimingDocumentInput>,
-    pub focus_excerpt: Option<String>,
-}
 
 #[derive(Debug, Clone)]
 pub struct OpenAiConfig {
     pub api_key: Option<String>,
     pub enabled: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LlmResponse {
-    pub mode: String,
-    pub should_respond: bool,
-    pub answer: String,
-    pub confidence: f32,
 }
 
 #[derive(Debug, Error)]
@@ -58,7 +34,7 @@ impl OpenAiReasoner {
         Self { client: Client::new(), config }
     }
 
-    pub async fn respond(
+    async fn respond_inner(
         &self,
         model: &str,
         mode: ResponseMode,
@@ -116,6 +92,46 @@ impl OpenAiReasoner {
             .ok_or_else(|| anyhow!(LlmError::InvalidPayload))?;
 
         serde_json::from_str(&output_text).context("failed to parse structured OpenAI output")
+    }
+}
+
+#[async_trait]
+impl LlmProvider for OpenAiReasoner {
+    fn provider_id(&self) -> &'static str {
+        "openai"
+    }
+
+    fn models(&self) -> Vec<ModelDescriptor> {
+        vec![
+            "gpt-4o-mini",
+            "gpt-4.1-mini",
+            "gpt-5-mini",
+            "gpt-5.4",
+            "gpt-5.4-mini",
+            "gpt-5",
+        ]
+        .into_iter()
+        .map(|model_id| ModelDescriptor {
+            provider_id: self.provider_id().to_string(),
+            model_id: model_id.to_string(),
+            locality: ModelLocality::Remote,
+            capabilities: vec![
+                ModelCapability::StructuredOutput,
+                ModelCapability::TranscriptReasoning,
+                ModelCapability::PrimingDocuments,
+            ],
+        })
+        .collect()
+    }
+
+    async fn respond(
+        &self,
+        model: &str,
+        mode: ResponseMode,
+        transcript: &[TranscriptSegment],
+        context: &AssistantContextInput,
+    ) -> Result<LlmResponse> {
+        self.respond_inner(model, mode, transcript, context).await
     }
 }
 

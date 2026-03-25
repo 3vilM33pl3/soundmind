@@ -10,52 +10,16 @@ use audio_pipeline::AudioChunk;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use futures_util::{SinkExt, StreamExt, stream::SplitSink};
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+pub use stt_core::{
+    FinalTranscript, PartialTranscript, Transcriber, TranscriberEvent, TranscriberHealth,
+};
 use tokio::net::TcpStream;
 use tokio::sync::{Mutex, mpsc};
 use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream, connect_async,
     tungstenite::{Message, client::IntoClientRequest, http::Request},
 };
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PartialTranscript {
-    pub start_ms: u64,
-    pub end_ms: u64,
-    pub text: String,
-    pub source: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FinalTranscript {
-    pub start_ms: u64,
-    pub end_ms: u64,
-    pub text: String,
-    pub source: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TranscriberHealth {
-    pub healthy: bool,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum TranscriberEvent {
-    PartialTranscript(PartialTranscript),
-    FinalTranscript(FinalTranscript),
-    Error(String),
-    Health(TranscriberHealth),
-}
-
-#[async_trait]
-pub trait Transcriber: Send {
-    async fn start(&mut self) -> Result<()>;
-    async fn push_audio(&mut self, chunk: AudioChunk) -> Result<()>;
-    fn try_recv_event(&mut self) -> Option<TranscriberEvent>;
-    async fn stop(&mut self) -> Result<()>;
-}
 
 #[derive(Debug, Clone)]
 pub struct ScribeRealtimeConfig {

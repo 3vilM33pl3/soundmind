@@ -24,14 +24,13 @@ use ipc_schema::{
     TranscriptSelectionPayload, TranscriptSnapshot, UserAction, default_assistant_instruction,
     default_openai_model,
 };
-use llm_openai::{
-    AssistantContextInput, OpenAiConfig, OpenAiReasoner, PrimingDocumentInput, ResponseMode,
-    assistant_timestamp,
-};
+use llm_core::{AssistantContextInput, LlmProvider, PrimingDocumentInput, ResponseMode};
+use llm_openai::{OpenAiConfig, OpenAiReasoner, assistant_timestamp};
 use policy_engine::PolicyState;
 use serde::{Deserialize, Serialize};
 use storage_sqlite::Storage;
-use stt_scribe::{MockTranscriber, ScribeRealtimeConfig, ScribeRealtimeTranscriber, Transcriber};
+use stt_core::Transcriber;
+use stt_scribe::{MockTranscriber, ScribeRealtimeConfig, ScribeRealtimeTranscriber};
 use tokio::fs;
 use tokio::process::Command;
 use tokio::sync::{RwLock, mpsc};
@@ -592,7 +591,7 @@ async fn handle_action(
     snapshot: &Arc<RwLock<BackendStatusSnapshot>>,
     storage: &Storage,
     settings: &Arc<RwLock<AppSettingsDto>>,
-    openai: &OpenAiReasoner,
+    llm_provider: &(dyn LlmProvider + Send + Sync),
     transcript: &mut TranscriptState,
     policy: &mut PolicyState,
     upload_gate: &mut UploadGate,
@@ -643,7 +642,7 @@ async fn handle_action(
                 snapshot,
                 storage,
                 settings,
-                openai,
+                llm_provider,
                 policy,
                 true,
             )
@@ -663,7 +662,7 @@ async fn handle_action(
                 snapshot,
                 storage,
                 settings,
-                openai,
+                llm_provider,
                 policy,
                 true,
             )
@@ -687,7 +686,7 @@ async fn handle_action(
                 snapshot,
                 storage,
                 settings,
-                openai,
+                llm_provider,
                 policy,
                 true,
             )
@@ -707,7 +706,7 @@ async fn handle_action(
                 snapshot,
                 storage,
                 settings,
-                openai,
+                llm_provider,
                 policy,
                 true,
             )
@@ -731,7 +730,7 @@ async fn handle_action(
                 snapshot,
                 storage,
                 settings,
-                openai,
+                llm_provider,
                 policy,
                 true,
             )
@@ -751,7 +750,7 @@ async fn handle_action(
                 snapshot,
                 storage,
                 settings,
-                openai,
+                llm_provider,
                 policy,
                 true,
             )
@@ -775,7 +774,7 @@ async fn handle_action(
                 snapshot,
                 storage,
                 settings,
-                openai,
+                llm_provider,
                 policy,
                 true,
             )
@@ -810,7 +809,7 @@ async fn maybe_generate_response(
     snapshot: &Arc<RwLock<BackendStatusSnapshot>>,
     storage: &Storage,
     settings: &Arc<RwLock<AppSettingsDto>>,
-    openai: &OpenAiReasoner,
+    llm_provider: &(dyn LlmProvider + Send + Sync),
     policy: &mut PolicyState,
     manual_trigger: bool,
 ) -> Result<bool> {
@@ -899,7 +898,7 @@ async fn maybe_generate_response(
         }
     }
 
-    let response = openai.respond(&model, mode, &window, &assistant_context).await?;
+    let response = llm_provider.respond(&model, mode, &window, &assistant_context).await?;
 
     if !response.should_respond {
         if manual_trigger {
@@ -1095,7 +1094,7 @@ async fn maybe_auto_generate_assistant(
     snapshot: &Arc<RwLock<BackendStatusSnapshot>>,
     storage: &Storage,
     settings: &Arc<RwLock<AppSettingsDto>>,
-    openai: &OpenAiReasoner,
+    llm_provider: &(dyn LlmProvider + Send + Sync),
     transcript: &mut TranscriptState,
     policy: &mut PolicyState,
 ) -> Result<()> {
@@ -1114,7 +1113,7 @@ async fn maybe_auto_generate_assistant(
             snapshot,
             storage,
             settings,
-            openai,
+            llm_provider,
             policy,
             false,
         )

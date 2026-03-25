@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use stt_scribe::{FinalTranscript, PartialTranscript, TranscriberEvent};
+use stt_core::{FinalTranscript, PartialTranscript, TranscriberEvent};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq)]
