@@ -17,6 +17,7 @@ const state = {
   lastPrimingRefreshAt: 0,
   lastHistoryRefreshAt: 0,
   lastTranscriptRenderKey: null,
+  lastTranscriptPartialText: null,
   restoredTranscriptSessionId: window.localStorage.getItem(RESTORED_TRANSCRIPT_SESSION_STORAGE_KEY),
 };
 
@@ -375,12 +376,6 @@ function updateTranscriptSelection() {
     .map((element) => element.dataset.segmentId)
     .filter((segmentId) => Boolean(segmentId));
 
-  if (!segmentIds.length) {
-    state.transcriptSelection = null;
-    renderSelectionState();
-    return;
-  }
-
   const nextSelection = { selected_text: selectedText, segment_ids: [...new Set(segmentIds)] };
   state.transcriptSelection = nextSelection;
   state.stickyTranscriptSelection = nextSelection;
@@ -435,8 +430,9 @@ function renderSelectionState() {
   }
 
   els.selectionStatus.className = "selection-status active";
-  els.selectionStatus.textContent =
-    `Selection active across ${selection.segment_ids.length} segment${selection.segment_ids.length === 1 ? "" : "s"}. Top actions now target the selected excerpt.`;
+  els.selectionStatus.textContent = selection.segment_ids.length
+    ? `Selection active across ${selection.segment_ids.length} segment${selection.segment_ids.length === 1 ? "" : "s"}. Top actions now target the selected excerpt.`
+    : "Selection active in the live transcript text. Top actions now target the selected excerpt.";
   els.clearSelectionButton.disabled = false;
   els.actionAnswerButton.disabled = false;
   els.actionSummaryButton.disabled = false;
@@ -514,6 +510,7 @@ function renderTranscriptPanel() {
   const restoredTranscript = isRestoredTranscriptView();
   const segments = currentTranscriptSegments();
   const transcriptRenderKey = buildTranscriptRenderKey(segments, restoredTranscript);
+  const partialText = restoredTranscript ? "" : normalizeTranscriptText(state.snapshot?.transcript?.partial_text || "");
   const questionButtonTitle = restoredTranscript ? "Select this question" : "Answer this question";
 
   els.transcriptHint.textContent = restoredTranscript
@@ -522,51 +519,35 @@ function renderTranscriptPanel() {
   els.transcriptReturnLive.hidden = !restoredTranscript;
   els.partialBox.textContent = restoredTranscript
     ? `Stored session restored. ${segments.length} committed transcript segment${segments.length === 1 ? "" : "s"} available.`
-    : state.snapshot?.transcript?.partial_text || "No partial transcript yet.";
+    : partialText || "No partial transcript yet.";
 
   renderQuestionBanner(currentDetectedQuestion(), restoredTranscript);
   renderSelectionState();
 
-  if (state.lastTranscriptRenderKey === transcriptRenderKey) {
+  const transcriptChanged = state.lastTranscriptRenderKey !== transcriptRenderKey;
+  const partialChanged = state.lastTranscriptPartialText !== partialText;
+  const partialPresenceChanged = Boolean(state.lastTranscriptPartialText) !== Boolean(partialText);
+
+  if (!transcriptChanged && !partialChanged) {
     return;
   }
 
-  if (segments.length === 0) {
-    els.segmentList.innerHTML = `<div class="empty-state">${
-      restoredTranscript ? "No transcript segments were stored for this session." : "No transcript segments committed yet."
-    }</div>`;
+  if (transcriptChanged || partialPresenceChanged) {
+    const transcriptMarkup = renderTranscriptMarkup({
+      segments,
+      partialText,
+      restoredTranscript,
+      questionButtonTitle,
+    });
+
+    els.segmentList.innerHTML = transcriptMarkup;
+    bindTranscriptInteractions();
     state.lastTranscriptRenderKey = transcriptRenderKey;
-    restoreTranscriptScrollState(transcriptScrollState);
-    return;
+  } else {
+    updateLivePartialText(partialText);
   }
 
-  const paragraphs = buildTranscriptParagraphs(segments);
-  els.segmentList.innerHTML = paragraphs
-    .map(
-      (paragraph) => `
-        <p class="transcript-paragraph">
-          ${paragraph
-            .map((segment) => {
-              const classes = ["transcript-fragment"];
-              if (segment.is_question_candidate) {
-                classes.push("transcript-question");
-              }
-              const questionButton = segment.is_question_candidate
-                ? `<button class="question-inline-button secondary" data-question-segment-id="${segment.id}" title="${questionButtonTitle}">?</button>`
-                : "";
-              return `
-                <span class="transcript-fragment-line">
-                  <span class="${classes.join(" ")}" data-segment-id="${segment.id}">${escapeHtml(segment.text)}</span>
-                  ${questionButton}
-                </span>
-              `;
-            })
-            .join(" ")}
-        </p>`,
-    )
-    .join("");
-  bindTranscriptInteractions();
-  state.lastTranscriptRenderKey = transcriptRenderKey;
+  state.lastTranscriptPartialText = partialText;
   restoreTranscriptScrollState(transcriptScrollState);
 }
 
@@ -580,6 +561,65 @@ function buildTranscriptRenderKey(segments, restoredTranscript) {
     sessionKey,
     ...segments.map((segment) => `${segment.id}:${segment.start_ms}:${segment.end_ms}:${segment.text}`),
   ].join("|");
+}
+
+function renderTranscriptMarkup({ segments, partialText, restoredTranscript, questionButtonTitle }) {
+  if (segments.length === 0 && !partialText) {
+    return `<div class="empty-state">${
+      restoredTranscript ? "No transcript segments were stored for this session." : "No transcript segments committed yet."
+    }</div>`;
+  }
+
+  const committedMarkup = segments.length
+    ? buildTranscriptParagraphs(segments)
+        .map(
+          (paragraph) => `
+            <p class="transcript-paragraph">
+              ${paragraph
+                .map((segment) => {
+                  const classes = ["transcript-fragment"];
+                  if (segment.is_question_candidate) {
+                    classes.push("transcript-question");
+                  }
+                  const questionButton = segment.is_question_candidate
+                    ? `<button class="question-inline-button secondary" data-question-segment-id="${segment.id}" title="${questionButtonTitle}">?</button>`
+                    : "";
+                  return `
+                    <span class="transcript-fragment-line">
+                      <span class="${classes.join(" ")}" data-segment-id="${segment.id}">${escapeHtml(segment.text)}</span>
+                      ${questionButton}
+                    </span>
+                  `;
+                })
+                .join(" ")}
+            </p>`,
+        )
+        .join("")
+    : "";
+
+  const partialMarkup = partialText
+    ? `
+        <div class="transcript-live-partial" aria-live="polite">
+          <span class="transcript-live-label">Live</span>
+          <span class="transcript-live-text" id="transcript-live-partial-text">${escapeHtml(partialText)}</span>
+        </div>
+      `
+    : "";
+
+  return `${committedMarkup}${partialMarkup}`;
+}
+
+function updateLivePartialText(partialText) {
+  const liveText = document.querySelector("#transcript-live-partial-text");
+  if (!liveText) {
+    return;
+  }
+
+  liveText.textContent = partialText;
+}
+
+function normalizeTranscriptText(text) {
+  return String(text || "").trim();
 }
 
 function captureTranscriptScrollState() {
