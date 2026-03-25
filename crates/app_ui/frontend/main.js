@@ -617,31 +617,7 @@ function renderTranscriptMarkup({ segments, partialText, restoredTranscript, man
         .map(
           (paragraph) => `
             <p class="transcript-paragraph">
-              ${paragraph
-                .map((segment) => {
-                  const classes = ["transcript-fragment"];
-                  const manualAnchorId = manualSelection?.segment_ids?.[manualSelection.segment_ids.length - 1];
-                  const isManualQuestion = manualSelection?.segment_ids?.some(
-                    (segmentId) => String(segmentId) === String(segment.id),
-                  );
-                  if (isManualQuestion) {
-                    classes.push("transcript-question", "transcript-question-manual");
-                  } else if (segment.is_question_candidate) {
-                    classes.push("transcript-question");
-                  }
-                  const showManualButton = isManualQuestion && String(segment.id) === String(manualAnchorId);
-                  const showAutoButton = !isManualQuestion && segment.is_question_candidate;
-                  const questionButton = showManualButton || showAutoButton
-                    ? `<button class="question-inline-button secondary" data-question-segment-id="${segment.id}" title="${questionButtonTitle}">?</button>`
-                    : "";
-                  return `
-                    <span class="transcript-fragment-line">
-                      <span class="${classes.join(" ")}" data-segment-id="${segment.id}">${escapeHtml(segment.text)}</span>
-                      ${questionButton}
-                    </span>
-                  `;
-                })
-                .join(" ")}
+              ${renderTranscriptParagraph(paragraph, manualSelection, questionButtonTitle)}
             </p>`,
         )
         .join("")
@@ -657,6 +633,70 @@ function renderTranscriptMarkup({ segments, partialText, restoredTranscript, man
     : "";
 
   return `${committedMarkup}${partialMarkup}`;
+}
+
+function renderTranscriptParagraph(paragraph, manualSelection, questionButtonTitle) {
+  const manualIds = new Set((manualSelection?.segment_ids || []).map((segmentId) => String(segmentId)));
+  const manualAnchorId = manualSelection?.segment_ids?.length
+    ? String(manualSelection.segment_ids[manualSelection.segment_ids.length - 1])
+    : null;
+  const parts = [];
+
+  for (let index = 0; index < paragraph.length; index += 1) {
+    const segment = paragraph[index];
+    const segmentId = String(segment.id);
+
+    if (manualIds.has(segmentId)) {
+      const run = [segment];
+      while (index + 1 < paragraph.length && manualIds.has(String(paragraph[index + 1].id))) {
+        index += 1;
+        run.push(paragraph[index]);
+      }
+      parts.push(renderManualTranscriptRun(run, manualAnchorId, questionButtonTitle));
+      continue;
+    }
+
+    parts.push(renderStandardTranscriptSegment(segment, questionButtonTitle));
+  }
+
+  return parts.join(" ");
+}
+
+function renderManualTranscriptRun(run, manualAnchorId, questionButtonTitle) {
+  const anchorSegment = run.find((segment) => String(segment.id) === String(manualAnchorId)) || run[run.length - 1];
+  const questionButton = anchorSegment
+    ? `<button class="question-inline-button secondary" data-question-segment-id="${anchorSegment.id}" title="${questionButtonTitle}">?</button>`
+    : "";
+  const content = run
+    .map(
+      (segment) =>
+        `<span class="transcript-fragment-piece" data-segment-id="${segment.id}">${escapeHtml(segment.text)}</span>`,
+    )
+    .join(" ");
+
+  return `
+    <span class="transcript-fragment-line transcript-fragment-line-manual">
+      <span class="transcript-fragment transcript-question transcript-question-manual transcript-manual-run">${content}</span>
+      ${questionButton}
+    </span>
+  `;
+}
+
+function renderStandardTranscriptSegment(segment, questionButtonTitle) {
+  const classes = ["transcript-fragment"];
+  if (segment.is_question_candidate) {
+    classes.push("transcript-question");
+  }
+  const questionButton = segment.is_question_candidate
+    ? `<button class="question-inline-button secondary" data-question-segment-id="${segment.id}" title="${questionButtonTitle}">?</button>`
+    : "";
+
+  return `
+    <span class="transcript-fragment-line">
+      <span class="${classes.join(" ")}" data-segment-id="${segment.id}">${escapeHtml(segment.text)}</span>
+      ${questionButton}
+    </span>
+  `;
 }
 
 function updateLivePartialText(partialText) {

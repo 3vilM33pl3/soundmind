@@ -763,6 +763,11 @@ textarea {
   display: inline;
 }
 
+.transcript-fragment-line-manual {
+  display: inline-flex;
+  align-items: baseline;
+}
+
 .transcript-paragraph {
   margin: 0;
 }
@@ -781,6 +786,11 @@ textarea {
 .transcript-question-manual {
   background: rgba(45, 97, 120, 0.16);
   box-shadow: inset 0 0 0 1px rgba(45, 97, 120, 0.2);
+}
+
+.transcript-manual-run,
+.transcript-fragment-piece {
+  display: inline;
 }
 
 .assistant-question {
