@@ -882,32 +882,6 @@ async fn maybe_auto_generate_assistant(
 ) -> Result<()> {
     let now = Utc::now();
 
-    if let Some(question) = transcript.last_question_candidate() {
-        if question.id == committed_segment.id
-            && policy.should_auto_answer_question(question.id, now)
-        {
-            let generated = maybe_generate_response(
-                ResponseMode::AnswerQuestion,
-                "answer",
-                vec![question.clone()],
-                Some(question.text.clone()),
-                session_id,
-                snapshot,
-                storage,
-                settings,
-                openai,
-                policy,
-                false,
-            )
-            .await?;
-
-            if generated {
-                policy.mark_auto_question_answered(question.id, now);
-            }
-            return Ok(());
-        }
-    }
-
     let recent_window = recent_transcript_window(transcript, 60);
     if recent_window.len() >= 3 && policy.should_auto_summarise(committed_segment.id, now) {
         let generated = maybe_generate_response(

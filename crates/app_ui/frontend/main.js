@@ -1391,7 +1391,7 @@ document.querySelectorAll(".hero-actions [data-action]").forEach((button) => {
   [els.actionSummaryButton, "SummariseLastMinute"],
   [els.actionCommentButton, "CommentCurrentTopic"],
 ].forEach(([button, defaultAction]) => {
-  button.addEventListener("mousedown", (event) => {
+  button.addEventListener("pointerdown", () => {
     const selection = snapshotTranscriptSelection();
     if (selection) {
       state.transcriptSelection = selection;
@@ -1399,7 +1399,6 @@ document.querySelectorAll(".hero-actions [data-action]").forEach((button) => {
       clearManualQuestionSelection();
       renderSelectionState();
     }
-    event.preventDefault();
   });
   button.addEventListener("click", async () => {
     const action = resolvePrimaryAction(defaultAction);
@@ -1423,9 +1422,6 @@ document.querySelectorAll(".hero-actions [data-action]").forEach((button) => {
   });
 });
 
-els.clearSelectionButton.addEventListener("mousedown", (event) => {
-  event.preventDefault();
-});
 els.clearSelectionButton.addEventListener("click", () => {
   clearTranscriptSelection();
 });
@@ -1438,9 +1434,6 @@ els.transcriptReturnLive?.addEventListener("click", () => {
   renderTranscriptPanel();
 });
 
-els.clearAllButton.addEventListener("mousedown", (event) => {
-  event.preventDefault();
-});
 els.clearAllButton.addEventListener("click", async () => {
   try {
     await runWithButtonFeedback(
