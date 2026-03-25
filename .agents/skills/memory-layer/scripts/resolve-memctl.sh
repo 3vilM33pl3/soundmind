@@ -46,15 +46,15 @@ resolve_memory_layer_config() {
     return 0
   fi
 
+  if [[ -f "$HOME/.config/memory-layer/memory-layer.toml" ]]; then
+    export MEMORY_LAYER_CONFIG="$HOME/.config/memory-layer/memory-layer.toml"
+    return 0
+  fi
+
   if command -v systemctl >/dev/null 2>&1 \
     && systemctl is-active --quiet memory-layer.service \
     && [[ -f /etc/memory-layer/memory-layer.toml ]]; then
     export MEMORY_LAYER_CONFIG=/etc/memory-layer/memory-layer.toml
-    return 0
-  fi
-
-  if [[ -f "$HOME/.config/memory-layer/memory-layer.toml" ]]; then
-    export MEMORY_LAYER_CONFIG="$HOME/.config/memory-layer/memory-layer.toml"
     return 0
   fi
 
