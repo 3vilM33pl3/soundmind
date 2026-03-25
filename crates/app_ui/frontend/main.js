@@ -384,25 +384,33 @@ function bindTranscriptInteractions() {
 }
 
 function updateTranscriptSelection() {
-  const selection = window.getSelection();
-  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+  const nextSelection = snapshotTranscriptSelection();
+  if (!nextSelection) {
     state.transcriptSelection = null;
     renderSelectionState();
     return;
+  }
+
+  state.transcriptSelection = nextSelection;
+  state.stickyTranscriptSelection = nextSelection;
+  clearManualQuestionSelection();
+  renderSelectionState();
+}
+
+function snapshotTranscriptSelection() {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+    return null;
   }
 
   const range = selection.getRangeAt(0);
   if (!selectionIsInsideTranscript(range)) {
-    state.transcriptSelection = null;
-    renderSelectionState();
-    return;
+    return null;
   }
 
   const selectedText = selection.toString().trim();
   if (!selectedText) {
-    state.transcriptSelection = null;
-    renderSelectionState();
-    return;
+    return null;
   }
 
   const segmentIds = Array.from(document.querySelectorAll("[data-segment-id]"))
@@ -410,10 +418,7 @@ function updateTranscriptSelection() {
     .map((element) => element.dataset.segmentId)
     .filter((segmentId) => Boolean(segmentId));
 
-  const nextSelection = { selected_text: selectedText, segment_ids: [...new Set(segmentIds)] };
-  state.transcriptSelection = nextSelection;
-  state.stickyTranscriptSelection = nextSelection;
-  renderSelectionState();
+  return { selected_text: selectedText, segment_ids: [...new Set(segmentIds)] };
 }
 
 function selectionIsInsideTranscript(range) {
@@ -1357,6 +1362,13 @@ document.querySelectorAll(".hero-actions [data-action]").forEach((button) => {
   [els.actionCommentButton, "CommentCurrentTopic"],
 ].forEach(([button, defaultAction]) => {
   button.addEventListener("mousedown", (event) => {
+    const selection = snapshotTranscriptSelection();
+    if (selection) {
+      state.transcriptSelection = selection;
+      state.stickyTranscriptSelection = selection;
+      clearManualQuestionSelection();
+      renderSelectionState();
+    }
     event.preventDefault();
   });
   button.addEventListener("click", async () => {
