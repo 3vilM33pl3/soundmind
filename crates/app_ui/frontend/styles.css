@@ -778,6 +778,11 @@ textarea {
   box-shadow: inset 0 0 0 1px rgba(188, 90, 51, 0.16);
 }
 
+.transcript-question-manual {
+  background: rgba(45, 97, 120, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(45, 97, 120, 0.2);
+}
+
 .transcript-live-partial {
   display: flex;
   gap: 0.55rem;

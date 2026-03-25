@@ -18,6 +18,9 @@ const state = {
   lastHistoryRefreshAt: 0,
   lastTranscriptRenderKey: null,
   lastTranscriptPartialText: null,
+  lastManualQuestionSelectionKey: null,
+  manualQuestionSelection: null,
+  manualQuestionSelectionSessionId: null,
   restoredTranscriptSessionId: window.localStorage.getItem(RESTORED_TRANSCRIPT_SESSION_STORAGE_KEY),
 };
 
@@ -509,8 +512,12 @@ function renderTranscriptPanel() {
   const transcriptScrollState = captureTranscriptScrollState();
   const restoredTranscript = isRestoredTranscriptView();
   const segments = currentTranscriptSegments();
-  const transcriptRenderKey = buildTranscriptRenderKey(segments, restoredTranscript);
   const partialText = restoredTranscript ? "" : normalizeTranscriptText(state.snapshot?.transcript?.partial_text || "");
+  const manualSelection = currentManualQuestionSelection();
+  const manualSelectionKey = manualSelection
+    ? `${state.manualQuestionSelectionSessionId || ""}:${manualSelection.segment_ids.join(",")}:${manualSelection.selected_text}`
+    : "";
+  const transcriptRenderKey = buildTranscriptRenderKey(segments, restoredTranscript, manualSelectionKey);
   const questionButtonTitle = restoredTranscript ? "Select this question" : "Answer this question";
 
   els.transcriptHint.textContent = restoredTranscript
@@ -527,8 +534,9 @@ function renderTranscriptPanel() {
   const transcriptChanged = state.lastTranscriptRenderKey !== transcriptRenderKey;
   const partialChanged = state.lastTranscriptPartialText !== partialText;
   const partialPresenceChanged = Boolean(state.lastTranscriptPartialText) !== Boolean(partialText);
+  const manualSelectionChanged = state.lastManualQuestionSelectionKey !== manualSelectionKey;
 
-  if (!transcriptChanged && !partialChanged) {
+  if (!transcriptChanged && !partialChanged && !manualSelectionChanged) {
     return;
   }
 
@@ -537,6 +545,7 @@ function renderTranscriptPanel() {
       segments,
       partialText,
       restoredTranscript,
+      manualSelection,
       questionButtonTitle,
     });
 
@@ -548,10 +557,11 @@ function renderTranscriptPanel() {
   }
 
   state.lastTranscriptPartialText = partialText;
+  state.lastManualQuestionSelectionKey = manualSelectionKey;
   restoreTranscriptScrollState(transcriptScrollState);
 }
 
-function buildTranscriptRenderKey(segments, restoredTranscript) {
+function buildTranscriptRenderKey(segments, restoredTranscript, manualSelectionKey) {
   const sessionKey = restoredTranscript
     ? state.selectedSession?.session?.id || "restored"
     : state.snapshot?.session_id || "live";
@@ -559,11 +569,12 @@ function buildTranscriptRenderKey(segments, restoredTranscript) {
   return [
     restoredTranscript ? "restored" : "live",
     sessionKey,
+    manualSelectionKey || "none",
     ...segments.map((segment) => `${segment.id}:${segment.start_ms}:${segment.end_ms}:${segment.text}`),
   ].join("|");
 }
 
-function renderTranscriptMarkup({ segments, partialText, restoredTranscript, questionButtonTitle }) {
+function renderTranscriptMarkup({ segments, partialText, restoredTranscript, manualSelection, questionButtonTitle }) {
   if (segments.length === 0 && !partialText) {
     return `<div class="empty-state">${
       restoredTranscript ? "No transcript segments were stored for this session." : "No transcript segments committed yet."
@@ -578,10 +589,18 @@ function renderTranscriptMarkup({ segments, partialText, restoredTranscript, que
               ${paragraph
                 .map((segment) => {
                   const classes = ["transcript-fragment"];
-                  if (segment.is_question_candidate) {
+                  const manualAnchorId = manualSelection?.segment_ids?.[0];
+                  const isManualQuestion = manualSelection?.segment_ids?.some(
+                    (segmentId) => String(segmentId) === String(segment.id),
+                  );
+                  if (isManualQuestion) {
+                    classes.push("transcript-question", "transcript-question-manual");
+                  } else if (segment.is_question_candidate) {
                     classes.push("transcript-question");
                   }
-                  const questionButton = segment.is_question_candidate
+                  const showManualButton = isManualQuestion && String(segment.id) === String(manualAnchorId);
+                  const showAutoButton = !isManualQuestion && segment.is_question_candidate;
+                  const questionButton = showManualButton || showAutoButton
                     ? `<button class="question-inline-button secondary" data-question-segment-id="${segment.id}" title="${questionButtonTitle}">?</button>`
                     : "";
                   return `
@@ -620,6 +639,44 @@ function updateLivePartialText(partialText) {
 
 function normalizeTranscriptText(text) {
   return String(text || "").trim();
+}
+
+function currentManualQuestionSelection() {
+  if (!state.manualQuestionSelection || !state.manualQuestionSelectionSessionId) {
+    return null;
+  }
+
+  const currentSessionId = currentTranscriptSessionId();
+  if (!currentSessionId || String(currentSessionId) !== String(state.manualQuestionSelectionSessionId)) {
+    return null;
+  }
+
+  return state.manualQuestionSelection;
+}
+
+function currentTranscriptSessionId() {
+  return isRestoredTranscriptView()
+    ? state.selectedSession?.session?.id || null
+    : state.snapshot?.session_id || null;
+}
+
+function promoteManualQuestionSelection(selection) {
+  if (!selection || !Array.isArray(selection.segment_ids) || !selection.segment_ids.length) {
+    return;
+  }
+
+  state.manualQuestionSelection = {
+    selected_text: String(selection.selected_text || "").trim(),
+    segment_ids: [...new Set(selection.segment_ids)],
+  };
+  state.manualQuestionSelectionSessionId = currentTranscriptSessionId();
+  state.lastManualQuestionSelectionKey = null;
+}
+
+function clearManualQuestionSelection() {
+  state.manualQuestionSelection = null;
+  state.manualQuestionSelectionSessionId = null;
+  state.lastManualQuestionSelectionKey = null;
 }
 
 function captureTranscriptScrollState() {
@@ -1198,6 +1255,7 @@ async function handlePrimingUpload() {
 
 async function handleClearAll() {
   clearTranscriptSelection();
+  clearManualQuestionSelection();
   await sendAction("ClearCurrentView");
   const snapshot = await fetchHealth();
   renderSnapshot(snapshot);
@@ -1239,6 +1297,10 @@ document.querySelectorAll(".hero-actions [data-action]").forEach((button) => {
           await sendAction(action);
           const snapshot = await fetchHealth();
           renderSnapshot(snapshot);
+          if (actionKey(action) === "AnswerSelection") {
+            promoteManualQuestionSelection(action.AnswerSelection);
+            renderTranscriptPanel();
+          }
         },
         actionLabels(actionKey(action)),
       );
@@ -1259,6 +1321,7 @@ els.transcriptReturnLive?.addEventListener("click", () => {
   state.restoredTranscriptSessionId = null;
   window.localStorage.removeItem(RESTORED_TRANSCRIPT_SESSION_STORAGE_KEY);
   clearTranscriptSelection();
+  clearManualQuestionSelection();
   renderTranscriptPanel();
 });
 
