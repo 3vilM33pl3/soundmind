@@ -397,7 +397,7 @@ impl Storage {
             r#"
             SELECT
               id, session_id, kind, content, confidence, created_at,
-              model_id, request_text, reused_from_history, reused_from_event_id
+              model_id, request_kind, request_text, reused_from_history, reused_from_event_id
             FROM assistant_events
             WHERE session_id = ?1
             ORDER BY created_at ASC
@@ -535,6 +535,7 @@ fn row_to_assistant_event(row: sqlx::sqlite::SqliteRow) -> Result<AssistantEvent
         id: Uuid::parse_str(&row.try_get::<String, _>("id")?)?,
         session_id: Uuid::parse_str(&row.try_get::<String, _>("session_id")?)?,
         kind: row.try_get("kind")?,
+        request_kind: row.try_get("request_kind")?,
         content: row.try_get("content")?,
         confidence: row.try_get::<f64, _>("confidence")? as f32,
         created_at: parse_sqlite_datetime(&row.try_get::<String, _>("created_at")?)?,

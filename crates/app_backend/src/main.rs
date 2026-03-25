@@ -134,6 +134,12 @@ struct AssistantRequestIdentity {
     request_text: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AssistantSurface {
+    Manual,
+    Automatic,
+}
+
 impl UploadGate {
     fn new(config: &CaptureSection) -> Self {
         Self {
@@ -628,6 +634,7 @@ async fn handle_action(
                 .map(|segment| vec![segment])
                 .unwrap_or_else(|| recent_transcript_window(transcript, 60));
             let generated = maybe_generate_response(
+                AssistantSurface::Manual,
                 ResponseMode::AnswerQuestion,
                 "answer",
                 last_question,
@@ -647,6 +654,7 @@ async fn handle_action(
         }
         UserAction::AnswerQuestionBySegment { segment_id } => {
             let generated = maybe_generate_response(
+                AssistantSurface::Manual,
                 ResponseMode::AnswerQuestion,
                 "answer",
                 transcript_window_for_segment_ids(transcript, &[segment_id]),
@@ -666,6 +674,7 @@ async fn handle_action(
         }
         UserAction::AnswerSelection(selection) => {
             let generated = maybe_generate_response(
+                AssistantSurface::Manual,
                 ResponseMode::AnswerQuestion,
                 "answer",
                 transcript_window_for_selection(transcript, &selection),
@@ -689,6 +698,7 @@ async fn handle_action(
         }
         UserAction::SummariseLastMinute => {
             let generated = maybe_generate_response(
+                AssistantSurface::Manual,
                 ResponseMode::SummariseRecent,
                 "summary",
                 recent_transcript_window(transcript, 60),
@@ -708,6 +718,7 @@ async fn handle_action(
         }
         UserAction::SummariseSelection(selection) => {
             let generated = maybe_generate_response(
+                AssistantSurface::Manual,
                 ResponseMode::SummariseRecent,
                 "summary",
                 transcript_window_for_selection(transcript, &selection),
@@ -731,6 +742,7 @@ async fn handle_action(
         }
         UserAction::CommentCurrentTopic => {
             let generated = maybe_generate_response(
+                AssistantSurface::Manual,
                 ResponseMode::Commentary,
                 "commentary",
                 transcript.last_n_segments(6),
@@ -750,6 +762,7 @@ async fn handle_action(
         }
         UserAction::CommentSelection(selection) => {
             let generated = maybe_generate_response(
+                AssistantSurface::Manual,
                 ResponseMode::Commentary,
                 "commentary",
                 transcript_window_for_selection(transcript, &selection),
@@ -776,7 +789,8 @@ async fn handle_action(
             let mut locked = snapshot.write().await;
             locked.transcript = TranscriptSnapshot { partial_text: None, segments: Vec::new() };
             locked.detected_question = None;
-            locked.latest_assistant = None;
+            locked.manual_assistant = None;
+            locked.automatic_assistant = None;
             locked.recent_errors.clear();
         }
     }
@@ -787,6 +801,7 @@ async fn handle_action(
 }
 
 async fn maybe_generate_response(
+    surface: AssistantSurface,
     mode: ResponseMode,
     kind: &str,
     window: Vec<TranscriptSegment>,
@@ -799,17 +814,20 @@ async fn maybe_generate_response(
     policy: &mut PolicyState,
     manual_trigger: bool,
 ) -> Result<bool> {
+    let question_text = assistant_question_text(kind, focus_excerpt.as_deref(), &window);
+
     if window.is_empty() {
         if manual_trigger {
             let notice = AssistantOutput {
                 kind: AssistantKind::Notice,
+                question_text,
                 content: "No recent transcript is available yet.".to_string(),
                 confidence: Some(1.0),
                 created_at: assistant_timestamp(),
                 reused_from_history: false,
                 source_model: None,
             };
-            snapshot.write().await.latest_assistant = Some(notice);
+            set_assistant_output(snapshot, surface, Some(notice)).await;
         }
         return Ok(false);
     }
@@ -818,13 +836,14 @@ async fn maybe_generate_response(
         if !policy.can_generate_manual_response() {
             let notice = AssistantOutput {
                 kind: AssistantKind::Notice,
+                question_text,
                 content: "Cloud processing is paused. Resume cloud processing to generate assistant output.".to_string(),
                 confidence: Some(1.0),
                 created_at: assistant_timestamp(),
                 reused_from_history: false,
                 source_model: None,
             };
-            snapshot.write().await.latest_assistant = Some(notice);
+            set_assistant_output(snapshot, surface, Some(notice)).await;
             return Ok(false);
         }
     } else if !policy.can_generate_automatic_response(Utc::now()) {
@@ -847,6 +866,7 @@ async fn maybe_generate_response(
         {
             let assistant = AssistantOutput {
                 kind: assistant_kind_from_str(kind),
+                question_text: question_text.clone(),
                 content: reused.content.clone(),
                 confidence: Some(reused.confidence),
                 created_at: assistant_timestamp(),
@@ -856,14 +876,14 @@ async fn maybe_generate_response(
 
             {
                 let mut locked = snapshot.write().await;
-                locked.latest_assistant = Some(assistant);
+                set_assistant_output_locked(&mut locked, surface, Some(assistant));
                 locked.cloud_state = effective_cloud_state(&locked);
             }
 
             storage
                 .insert_assistant_event(
                     session_id,
-                    kind,
+                    assistant_event_kind(kind, surface),
                     &reused.content,
                     reused.confidence,
                     &model,
@@ -885,6 +905,7 @@ async fn maybe_generate_response(
         if manual_trigger {
             let notice = AssistantOutput {
                 kind: AssistantKind::Notice,
+                question_text,
                 content: if response.answer.trim().is_empty() {
                     "No useful assistant response is available yet.".to_string()
                 } else {
@@ -896,7 +917,7 @@ async fn maybe_generate_response(
                 source_model: Some(model.clone()),
             };
             let mut locked = snapshot.write().await;
-            locked.latest_assistant = Some(notice);
+            set_assistant_output_locked(&mut locked, surface, Some(notice));
             locked.cloud_state = effective_cloud_state(&locked);
         }
         return Ok(false);
@@ -904,6 +925,7 @@ async fn maybe_generate_response(
 
     let assistant = AssistantOutput {
         kind: assistant_kind_from_str(kind),
+        question_text,
         content: response.answer.clone(),
         confidence: Some(response.confidence),
         created_at: assistant_timestamp(),
@@ -913,7 +935,7 @@ async fn maybe_generate_response(
 
     {
         let mut locked = snapshot.write().await;
-        locked.latest_assistant = Some(assistant.clone());
+        set_assistant_output_locked(&mut locked, surface, Some(assistant.clone()));
         locked.cloud_state = effective_cloud_state(&locked);
     }
 
@@ -921,7 +943,7 @@ async fn maybe_generate_response(
         storage
             .insert_assistant_event(
                 session_id,
-                kind,
+                assistant_event_kind(kind, surface),
                 &response.answer,
                 response.confidence,
                 &model,
@@ -943,6 +965,64 @@ fn assistant_kind_from_str(kind: &str) -> AssistantKind {
         "summary" => AssistantKind::Summary,
         "commentary" => AssistantKind::Commentary,
         _ => AssistantKind::Answer,
+    }
+}
+
+fn assistant_event_kind(kind: &str, surface: AssistantSurface) -> &'static str {
+    match (surface, kind) {
+        (AssistantSurface::Manual, "answer") => "manual_answer",
+        (AssistantSurface::Manual, "summary") => "manual_summary",
+        (AssistantSurface::Manual, "commentary") => "manual_commentary",
+        (AssistantSurface::Automatic, "answer") => "automatic_answer",
+        (AssistantSurface::Automatic, "summary") => "automatic_summary",
+        (AssistantSurface::Automatic, "commentary") => "automatic_commentary",
+        (AssistantSurface::Manual, _) => "manual_answer",
+        (AssistantSurface::Automatic, _) => "automatic_answer",
+    }
+}
+
+fn assistant_question_text(
+    kind: &str,
+    focus_excerpt: Option<&str>,
+    window: &[TranscriptSegment],
+) -> Option<String> {
+    if kind != "answer" {
+        return focus_excerpt
+            .map(normalize_display_text)
+            .filter(|text| !text.is_empty());
+    }
+
+    focus_excerpt
+        .map(normalize_display_text)
+        .filter(|text| !text.is_empty())
+        .or_else(|| {
+            window
+                .iter()
+                .rev()
+                .find(|segment| is_question_candidate(&segment.text))
+                .map(|segment| normalize_display_text(&segment.text))
+        })
+        .or_else(|| window.last().map(|segment| normalize_display_text(&segment.text)))
+        .filter(|text| !text.is_empty())
+}
+
+async fn set_assistant_output(
+    snapshot: &Arc<RwLock<BackendStatusSnapshot>>,
+    surface: AssistantSurface,
+    output: Option<AssistantOutput>,
+) {
+    let mut locked = snapshot.write().await;
+    set_assistant_output_locked(&mut locked, surface, output);
+}
+
+fn set_assistant_output_locked(
+    snapshot: &mut BackendStatusSnapshot,
+    surface: AssistantSurface,
+    output: Option<AssistantOutput>,
+) {
+    match surface {
+        AssistantSurface::Manual => snapshot.manual_assistant = output,
+        AssistantSurface::Automatic => snapshot.automatic_assistant = output,
     }
 }
 
@@ -1021,13 +1101,15 @@ async fn maybe_auto_generate_assistant(
 ) -> Result<()> {
     let now = Utc::now();
 
-    let recent_window = recent_transcript_window(transcript, 60);
-    if recent_window.len() >= 3 && policy.should_auto_summarise(committed_segment.id, now) {
+    if is_question_candidate(&committed_segment.text)
+        && policy.should_auto_answer_question(committed_segment.id, now)
+    {
         let generated = maybe_generate_response(
-            ResponseMode::SummariseRecent,
-            "summary",
-            recent_window,
-            None,
+            AssistantSurface::Automatic,
+            ResponseMode::AnswerQuestion,
+            "answer",
+            transcript_window_for_segment_ids(transcript, &[committed_segment.id]),
+            Some(committed_segment.text.clone()),
             session_id,
             snapshot,
             storage,
@@ -1039,7 +1121,7 @@ async fn maybe_auto_generate_assistant(
         .await?;
 
         if generated {
-            policy.mark_auto_summary_sent(committed_segment.id, now);
+            policy.mark_auto_question_answered(committed_segment.id, now);
         }
     }
 
