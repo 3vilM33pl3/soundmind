@@ -17,7 +17,8 @@ use tokio::sync::RwLock;
 use transcript_core::{TranscriptSegment, TranscriptState, is_question_candidate};
 use uuid::Uuid;
 
-use crate::{MAX_HEALTH_SEGMENTS, UploadGate, effective_cloud_state, sync_upload_state};
+use crate::MAX_HEALTH_SEGMENTS;
+use crate::runtime::{UploadGate, effective_cloud_state, sync_upload_state};
 
 #[derive(Debug, Clone)]
 pub(crate) struct AssistantRequestIdentity {
