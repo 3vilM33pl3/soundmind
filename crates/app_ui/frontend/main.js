@@ -19,7 +19,7 @@ const state = {
   lastTranscriptRenderKey: null,
   lastTranscriptPartialText: null,
   lastManualQuestionSelectionKey: null,
-  manualQuestionSelection: null,
+  manualQuestionSelections: [],
   manualQuestionSelectionSessionId: null,
   restoredTranscriptSessionId: window.localStorage.getItem(RESTORED_TRANSCRIPT_SESSION_STORAGE_KEY),
 };
@@ -447,6 +447,19 @@ function currentActionSelection() {
   return state.transcriptSelection || state.stickyTranscriptSelection || currentManualQuestionSelection();
 }
 
+function currentManualQuestionSelections() {
+  if (!state.manualQuestionSelections.length || !state.manualQuestionSelectionSessionId) {
+    return [];
+  }
+
+  const currentSessionId = currentTranscriptSessionId();
+  if (!currentSessionId || String(currentSessionId) !== String(state.manualQuestionSelectionSessionId)) {
+    return [];
+  }
+
+  return state.manualQuestionSelections;
+}
+
 function refreshCurrentSelectionTarget() {
   const selection = snapshotTranscriptSelection();
   if (!selection) {
@@ -597,9 +610,11 @@ function renderTranscriptPanel() {
   const restoredTranscript = isRestoredTranscriptView();
   const segments = currentTranscriptSegments();
   const partialText = restoredTranscript ? "" : normalizeTranscriptText(state.snapshot?.transcript?.partial_text || "");
-  const manualSelection = currentManualQuestionSelection();
-  const manualSelectionKey = manualSelection
-    ? `${state.manualQuestionSelectionSessionId || ""}:${manualSelection.segment_ids.join(",")}:${manualSelection.selected_text}`
+  const manualSelections = currentManualQuestionSelections();
+  const manualSelectionKey = manualSelections.length
+    ? `${state.manualQuestionSelectionSessionId || ""}:${manualSelections
+        .map((selection) => `${selection.segment_ids.join(",")}:${selection.selected_text}`)
+        .join("|")}`
     : "";
   const transcriptRenderKey = buildTranscriptRenderKey(segments, restoredTranscript, manualSelectionKey);
   const questionButtonTitle = restoredTranscript ? "Select this question" : "Answer this question";
@@ -629,7 +644,7 @@ function renderTranscriptPanel() {
       segments,
       partialText,
       restoredTranscript,
-      manualSelection,
+      manualSelections,
       questionButtonTitle,
     });
 
@@ -658,7 +673,7 @@ function buildTranscriptRenderKey(segments, restoredTranscript, manualSelectionK
   ].join("|");
 }
 
-function renderTranscriptMarkup({ segments, partialText, restoredTranscript, manualSelection, questionButtonTitle }) {
+function renderTranscriptMarkup({ segments, partialText, restoredTranscript, manualSelections, questionButtonTitle }) {
   if (segments.length === 0 && !partialText) {
     return `<div class="empty-state">${
       restoredTranscript ? "No transcript segments were stored for this session." : "No transcript segments committed yet."
@@ -670,7 +685,7 @@ function renderTranscriptMarkup({ segments, partialText, restoredTranscript, man
         .map(
           (paragraph) => `
             <p class="transcript-paragraph">
-              ${renderTranscriptParagraph(paragraph, manualSelection, questionButtonTitle)}
+              ${renderTranscriptParagraph(paragraph, manualSelections, questionButtonTitle)}
             </p>`,
         )
         .join("")
@@ -688,24 +703,30 @@ function renderTranscriptMarkup({ segments, partialText, restoredTranscript, man
   return `${committedMarkup}${partialMarkup}`;
 }
 
-function renderTranscriptParagraph(paragraph, manualSelection, questionButtonTitle) {
-  const manualIds = new Set((manualSelection?.segment_ids || []).map((segmentId) => String(segmentId)));
-  const manualAnchorId = manualSelection?.segment_ids?.length
-    ? String(manualSelection.segment_ids[manualSelection.segment_ids.length - 1])
-    : null;
+function renderTranscriptParagraph(paragraph, manualSelections, questionButtonTitle) {
+  const manualSelectionBySegmentId = new Map();
+  for (const selection of manualSelections || []) {
+    for (const segmentId of selection.segment_ids || []) {
+      manualSelectionBySegmentId.set(String(segmentId), selection);
+    }
+  }
   const parts = [];
 
   for (let index = 0; index < paragraph.length; index += 1) {
     const segment = paragraph[index];
     const segmentId = String(segment.id);
+    const manualSelection = manualSelectionBySegmentId.get(segmentId);
 
-    if (manualIds.has(segmentId)) {
+    if (manualSelection) {
       const run = [segment];
-      while (index + 1 < paragraph.length && manualIds.has(String(paragraph[index + 1].id))) {
+      while (
+        index + 1 < paragraph.length &&
+        manualSelectionBySegmentId.get(String(paragraph[index + 1].id)) === manualSelection
+      ) {
         index += 1;
         run.push(paragraph[index]);
       }
-      parts.push(renderManualTranscriptRun(run, manualAnchorId, questionButtonTitle));
+      parts.push(renderManualTranscriptRun(run, manualSelection, questionButtonTitle));
       continue;
     }
 
@@ -715,7 +736,10 @@ function renderTranscriptParagraph(paragraph, manualSelection, questionButtonTit
   return parts.join(" ");
 }
 
-function renderManualTranscriptRun(run, manualAnchorId, questionButtonTitle) {
+function renderManualTranscriptRun(run, manualSelection, questionButtonTitle) {
+  const manualAnchorId = manualSelection?.segment_ids?.length
+    ? String(manualSelection.segment_ids[manualSelection.segment_ids.length - 1])
+    : null;
   const anchorSegment = run.find((segment) => String(segment.id) === String(manualAnchorId)) || run[run.length - 1];
   const questionButton = anchorSegment
     ? `<button class="question-inline-button secondary" data-question-segment-id="${anchorSegment.id}" title="${questionButtonTitle}">?</button>`
@@ -766,16 +790,8 @@ function normalizeTranscriptText(text) {
 }
 
 function currentManualQuestionSelection() {
-  if (!state.manualQuestionSelection || !state.manualQuestionSelectionSessionId) {
-    return null;
-  }
-
-  const currentSessionId = currentTranscriptSessionId();
-  if (!currentSessionId || String(currentSessionId) !== String(state.manualQuestionSelectionSessionId)) {
-    return null;
-  }
-
-  return state.manualQuestionSelection;
+  const selections = currentManualQuestionSelections();
+  return selections.length ? selections[selections.length - 1] : null;
 }
 
 function currentTranscriptSessionId() {
@@ -793,7 +809,10 @@ function promoteManualQuestionSelection(selection) {
     selected_text: String(selection.selected_text || "").trim(),
     segment_ids: [...new Set(selection.segment_ids)],
   };
-  state.manualQuestionSelection = promotedSelection;
+  const existingSelections = currentManualQuestionSelections().filter(
+    (candidate) => candidate.segment_ids.join(",") !== promotedSelection.segment_ids.join(","),
+  );
+  state.manualQuestionSelections = [...existingSelections, promotedSelection];
   state.transcriptSelection = null;
   state.stickyTranscriptSelection = promotedSelection;
   state.manualQuestionSelectionSessionId = currentTranscriptSessionId();
@@ -801,7 +820,7 @@ function promoteManualQuestionSelection(selection) {
 }
 
 function clearManualQuestionSelection() {
-  state.manualQuestionSelection = null;
+  state.manualQuestionSelections = [];
   state.manualQuestionSelectionSessionId = null;
   state.lastManualQuestionSelectionKey = null;
 }
