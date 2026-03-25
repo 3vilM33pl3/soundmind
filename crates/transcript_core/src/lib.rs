@@ -95,10 +95,76 @@ impl TranscriptState {
 
 pub fn is_question_candidate(text: &str) -> bool {
     let trimmed = text.trim();
-    trimmed.ends_with('?')
-        || ["who", "what", "when", "where", "why", "how", "can", "should"]
-            .iter()
-            .any(|prefix| trimmed.to_lowercase().starts_with(prefix))
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    if trimmed.ends_with('?') {
+        return true;
+    }
+
+    let normalized = trimmed
+        .trim_matches(|character: char| character.is_ascii_punctuation() && character != '\'' && character != '-')
+        .to_lowercase();
+
+    if normalized.is_empty() {
+        return false;
+    }
+
+    const QUESTION_PREFIXES: [&str; 26] = [
+        "who ",
+        "what ",
+        "when ",
+        "where ",
+        "why ",
+        "how ",
+        "which ",
+        "can ",
+        "could ",
+        "would ",
+        "will ",
+        "do ",
+        "did ",
+        "does ",
+        "have ",
+        "has ",
+        "is ",
+        "are ",
+        "was ",
+        "were ",
+        "tell me ",
+        "describe ",
+        "explain ",
+        "walk me through ",
+        "talk me through ",
+        "give me ",
+    ];
+
+    if QUESTION_PREFIXES.iter().any(|prefix| normalized.starts_with(prefix)) {
+        return true;
+    }
+
+    const QUESTION_PHRASES: [&str; 13] = [
+        "what's ",
+        "who's ",
+        "how's ",
+        "can you ",
+        "could you ",
+        "would you ",
+        "will you ",
+        "do you ",
+        "did you ",
+        "have you ",
+        "what do ",
+        "what would ",
+        "how would ",
+    ];
+
+    if QUESTION_PHRASES.iter().any(|phrase| normalized.starts_with(phrase)) {
+        return true;
+    }
+
+    normalized.starts_with("if ")
 }
 
 fn sanitize_transcript_text(text: &str) -> String {
@@ -119,7 +185,8 @@ fn sanitize_transcript_text(text: &str) -> String {
             continue;
         }
 
-        if is_cue_number(token) && tokens.get(index + 1).is_some_and(|next| is_timestamp_token(next))
+        if is_cue_number(token)
+            && tokens.get(index + 1).is_some_and(|next| is_timestamp_token(next))
         {
             index += 1;
             continue;
@@ -145,7 +212,10 @@ fn is_timestamp_arrow(token: &str) -> bool {
 
 fn is_timestamp_token(token: &str) -> bool {
     let normalized = token.trim_matches(|character: char| {
-        !character.is_ascii_alphanumeric() && character != ':' && character != ',' && character != '.'
+        !character.is_ascii_alphanumeric()
+            && character != ':'
+            && character != ','
+            && character != '.'
     });
     let Some((hours, rest)) = normalized.split_once(':') else {
         return false;
@@ -153,10 +223,7 @@ fn is_timestamp_token(token: &str) -> bool {
     let Some((minutes, rest)) = rest.split_once(':') else {
         return false;
     };
-    let Some((seconds, millis)) = rest
-        .split_once(',')
-        .or_else(|| rest.split_once('.'))
-    else {
+    let Some((seconds, millis)) = rest.split_once(',').or_else(|| rest.split_once('.')) else {
         return false;
     };
 
@@ -187,6 +254,20 @@ mod tests {
 
         assert!(state.last_question_candidate().is_some());
         assert!(is_question_candidate("Can someone explain this?"));
+    }
+
+    #[test]
+    fn recognizes_question_phrasings_without_a_trailing_mark() {
+        assert!(is_question_candidate("Tell me about yourself and what you've studied so far."));
+        assert!(is_question_candidate("If requirements changed during the project, how would you handle that."));
+        assert!(is_question_candidate("Walk me through your approach to monitoring."));
+        assert!(is_question_candidate("What would you use inside Databricks besides PySpark when working directly with data"));
+    }
+
+    #[test]
+    fn avoids_labeling_plain_statements_as_questions() {
+        assert!(!is_question_candidate("I studied computer science and worked on a few data pipelines."));
+        assert!(!is_question_candidate("This is a summary of the interview so far."));
     }
 
     #[test]
@@ -234,10 +315,7 @@ mod tests {
         );
 
         let segment = segment.expect("segment should survive cleanup");
-        assert_eq!(
-            segment.text,
-            "This is obviously a shorter version for a real job interview."
-        );
+        assert_eq!(segment.text, "This is obviously a shorter version for a real job interview.");
     }
 
     #[test]
@@ -250,14 +328,12 @@ mod tests {
             TranscriberEvent::PartialTranscript(PartialTranscript {
                 start_ms: 0,
                 end_ms: 500,
-                text: "Your typical interview 24 00:01:03,000 -- 00:01:04,000 lasts for about".to_string(),
+                text: "Your typical interview 24 00:01:03,000 -- 00:01:04,000 lasts for about"
+                    .to_string(),
                 source: "mock".to_string(),
             }),
         );
 
-        assert_eq!(
-            state.partial_text(),
-            Some("Your typical interview lasts for about")
-        );
+        assert_eq!(state.partial_text(), Some("Your typical interview lasts for about"));
     }
 }

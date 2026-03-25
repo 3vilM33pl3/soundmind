@@ -750,16 +750,17 @@ textarea {
   text-wrap: pretty;
   height: 30rem;
   overflow-y: auto;
+  user-select: text;
+  cursor: text;
 }
 
 .transcript-fragment {
   color: var(--ink);
+  user-select: text;
 }
 
 .transcript-fragment-line {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 0.45rem;
+  display: inline;
 }
 
 .transcript-paragraph {
@@ -785,6 +786,9 @@ textarea {
   font-size: 0.95rem;
   line-height: 1;
   box-shadow: 0 8px 18px rgba(45, 97, 120, 0.14);
+  user-select: none;
+  vertical-align: baseline;
+  margin-left: 0.45rem;
 }
 
 .question-inline-button.secondary {

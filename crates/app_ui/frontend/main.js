@@ -16,6 +16,7 @@ const state = {
   lastSettingsRefreshAt: 0,
   lastPrimingRefreshAt: 0,
   lastHistoryRefreshAt: 0,
+  lastTranscriptRenderKey: null,
   restoredTranscriptSessionId: window.localStorage.getItem(RESTORED_TRANSCRIPT_SESSION_STORAGE_KEY),
 };
 
@@ -512,6 +513,7 @@ function renderTranscriptPanel() {
   const transcriptScrollState = captureTranscriptScrollState();
   const restoredTranscript = isRestoredTranscriptView();
   const segments = currentTranscriptSegments();
+  const transcriptRenderKey = buildTranscriptRenderKey(segments, restoredTranscript);
   const questionButtonTitle = restoredTranscript ? "Select this question" : "Answer this question";
 
   els.transcriptHint.textContent = restoredTranscript
@@ -525,10 +527,15 @@ function renderTranscriptPanel() {
   renderQuestionBanner(currentDetectedQuestion(), restoredTranscript);
   renderSelectionState();
 
+  if (state.lastTranscriptRenderKey === transcriptRenderKey) {
+    return;
+  }
+
   if (segments.length === 0) {
     els.segmentList.innerHTML = `<div class="empty-state">${
       restoredTranscript ? "No transcript segments were stored for this session." : "No transcript segments committed yet."
     }</div>`;
+    state.lastTranscriptRenderKey = transcriptRenderKey;
     restoreTranscriptScrollState(transcriptScrollState);
     return;
   }
@@ -559,7 +566,20 @@ function renderTranscriptPanel() {
     )
     .join("");
   bindTranscriptInteractions();
+  state.lastTranscriptRenderKey = transcriptRenderKey;
   restoreTranscriptScrollState(transcriptScrollState);
+}
+
+function buildTranscriptRenderKey(segments, restoredTranscript) {
+  const sessionKey = restoredTranscript
+    ? state.selectedSession?.session?.id || "restored"
+    : state.snapshot?.session_id || "live";
+
+  return [
+    restoredTranscript ? "restored" : "live",
+    sessionKey,
+    ...segments.map((segment) => `${segment.id}:${segment.start_ms}:${segment.end_ms}:${segment.text}`),
+  ].join("|");
 }
 
 function captureTranscriptScrollState() {
