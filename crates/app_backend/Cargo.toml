@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+app_core = { path = "../app_core" }
 audio_capture = { path = "../audio_capture" }
 audio_pipeline = { path = "../audio_pipeline" }
 axum.workspace = true

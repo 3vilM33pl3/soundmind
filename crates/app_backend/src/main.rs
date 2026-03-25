@@ -1,9 +1,12 @@
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use app_core::{
+    AppCoreState, CaptureSection, DeletePrimingDocumentResponse, RootConfig, SessionExportQuery,
+    UploadPrimingDocumentRequest, load_config, load_keys_env, sqlite_url,
+};
 use audio_capture::{
     AudioSource, CaptureConfig, CaptureEvent, MockAudioSource, ParecMonitorAudioSource,
 };
@@ -13,13 +16,10 @@ use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use chrono::Utc;
 use context_engine::{last_question_candidate, recent_transcript_window};
-use dotenvy::from_filename_override;
 use ipc_schema::{
-    AppMode, AppSettingsDto, AssistantKind, AssistantOutput, BackendStatusSnapshot, CaptureState,
+    AppSettingsDto, AssistantKind, AssistantOutput, BackendStatusSnapshot, CaptureState,
     CloudState, PrimingDocumentDto, SessionDetailDto, SessionSummaryDto, TranscriptSegmentDto,
     TranscriptSelectionPayload, TranscriptSnapshot, UserAction, default_assistant_instruction,
     default_openai_model,
@@ -27,12 +27,9 @@ use ipc_schema::{
 use llm_core::{AssistantContextInput, LlmProvider, PrimingDocumentInput, ResponseMode};
 use llm_openai::{OpenAiConfig, OpenAiReasoner, assistant_timestamp};
 use policy_engine::PolicyState;
-use serde::{Deserialize, Serialize};
 use storage_sqlite::Storage;
 use stt_core::Transcriber;
 use stt_scribe::{MockTranscriber, ScribeRealtimeConfig, ScribeRealtimeTranscriber};
-use tokio::fs;
-use tokio::process::Command;
 use tokio::sync::{RwLock, mpsc};
 use tower_http::cors::CorsLayer;
 use tracing::{error, info, warn};
@@ -40,81 +37,6 @@ use transcript_core::{TranscriptSegment, TranscriptState, is_question_candidate}
 use uuid::Uuid;
 
 const MAX_HEALTH_SEGMENTS: usize = 48;
-
-#[derive(Debug, Clone, Deserialize)]
-struct RootConfig {
-    app: AppSection,
-    capture: CaptureSection,
-    storage: StorageSection,
-    providers: ProviderSection,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct AppSection {
-    mode: AppMode,
-    auto_start: bool,
-    #[serde(default = "default_auto_start_cloud")]
-    auto_start_cloud: bool,
-    http_bind: String,
-    simulate_transcriber: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct CaptureSection {
-    source: String,
-    frame_ms: u64,
-    sample_rate_hz: u32,
-    channels: u16,
-    silence_threshold: f32,
-    chunk_ms: u64,
-    #[serde(default = "default_speech_hold_ms")]
-    speech_hold_ms: u64,
-    #[serde(default = "default_idle_timeout_ms")]
-    idle_timeout_ms: u64,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct StorageSection {
-    database_path: String,
-    retention_days: u32,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct ProviderSection {
-    openai: ProviderConfig,
-    elevenlabs: ProviderConfig,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct ProviderConfig {
-    enabled: bool,
-    model: String,
-}
-
-#[derive(Clone)]
-struct AppState {
-    snapshot: Arc<RwLock<BackendStatusSnapshot>>,
-    action_tx: mpsc::Sender<UserAction>,
-    storage: Arc<Storage>,
-    settings: Arc<RwLock<AppSettingsDto>>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct SessionExportQuery {
-    format: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct UploadPrimingDocumentRequest {
-    file_name: String,
-    mime_type: Option<String>,
-    content_base64: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct DeletePrimingDocumentResponse {
-    deleted: uuid::Uuid,
-}
 
 #[derive(Debug, Clone)]
 struct UploadGate {
@@ -195,18 +117,6 @@ impl UploadGate {
     }
 }
 
-fn default_auto_start_cloud() -> bool {
-    false
-}
-
-fn default_speech_hold_ms() -> u64 {
-    1_200
-}
-
-fn default_idle_timeout_ms() -> u64 {
-    5_000
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -219,33 +129,14 @@ async fn main() -> Result<()> {
     let config = load_config()?;
     let database_url = sqlite_url(&config.storage.database_path);
     let storage = Arc::new(Storage::connect(&database_url).await?);
-    let settings = Arc::new(RwLock::new(load_or_initialize_settings(&storage, &config).await?));
-    let initial_settings = settings.read().await.clone();
-    let snapshot = Arc::new(RwLock::new(BackendStatusSnapshot {
-        mode: initial_settings.default_mode,
-        capture_state: if config.app.auto_start {
-            CaptureState::Capturing
-        } else {
-            CaptureState::Paused
-        },
-        cloud_state: CloudState::Off,
-        privacy_pause: !config.app.auto_start,
-        cloud_pause: !initial_settings.auto_start_cloud,
-        ..BackendStatusSnapshot::default()
-    }));
 
     let (action_tx, action_rx) = mpsc::channel(64);
-    let app_state = AppState {
-        snapshot: Arc::clone(&snapshot),
-        action_tx: action_tx.clone(),
-        storage: Arc::clone(&storage),
-        settings: Arc::clone(&settings),
-    };
+    let app_state = AppCoreState::initialize(&config, Arc::clone(&storage), action_tx.clone()).await?;
 
     let config_for_runtime = config.clone();
-    let runtime_snapshot = Arc::clone(&snapshot);
-    let runtime_storage = Arc::clone(&storage);
-    let runtime_settings = Arc::clone(&settings);
+    let runtime_snapshot = app_state.snapshot_handle();
+    let runtime_storage = app_state.storage_handle();
+    let runtime_settings = app_state.settings_handle();
     tokio::spawn(async move {
         if let Err(error) = run_runtime(
             config_for_runtime,
@@ -1312,415 +1203,106 @@ fn effective_stt_status(snapshot: &BackendStatusSnapshot) -> String {
     }
 }
 
-async fn health(State(state): State<AppState>) -> Json<BackendStatusSnapshot> {
-    let mut snapshot = state.snapshot.read().await.clone();
-    snapshot.recent_errors.retain(|error| !error.trim().is_empty());
-    Json(snapshot)
+async fn health(State(state): State<AppCoreState>) -> Json<BackendStatusSnapshot> {
+    Json(state.snapshot().await)
 }
 
 async fn post_action(
-    State(state): State<AppState>,
+    State(state): State<AppCoreState>,
     Json(action): Json<UserAction>,
 ) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
-    state
-        .action_tx
-        .send(action)
-        .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-
+    state.dispatch_action(action).await.map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
-async fn get_settings(State(state): State<AppState>) -> Json<AppSettingsDto> {
-    Json(state.settings.read().await.clone())
+async fn get_settings(State(state): State<AppCoreState>) -> Json<AppSettingsDto> {
+    Json(state.get_settings().await)
 }
 
 async fn get_priming_documents(
-    State(state): State<AppState>,
+    State(state): State<AppCoreState>,
 ) -> Result<Json<Vec<PrimingDocumentDto>>, StatusCode> {
-    let documents = state
-        .storage
-        .list_priming_documents()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let documents = state.list_priming_documents().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(documents))
 }
 
 async fn post_priming_document(
-    State(state): State<AppState>,
+    State(state): State<AppCoreState>,
     Json(request): Json<UploadPrimingDocumentRequest>,
 ) -> Result<Json<PrimingDocumentDto>, StatusCode> {
-    let decoded = BASE64_STANDARD
-        .decode(request.content_base64.as_bytes())
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
-    let mime_type = request
-        .mime_type
-        .clone()
-        .filter(|mime_type| !mime_type.trim().is_empty())
-        .unwrap_or_else(|| "application/octet-stream".to_string());
-
-    let extracted_text =
-        extract_document_text(&request.file_name, &mime_type, &decoded).await.map_err(|error| {
-            warn!(?error, file_name = %request.file_name, "failed to ingest priming document");
-            StatusCode::BAD_REQUEST
-        })?;
-
-    let document = state
-        .storage
-        .insert_priming_document(&request.file_name, &mime_type, &extracted_text)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    state
-        .storage
-        .append_audit_event(None, &format!("priming_document_added:{}", request.file_name))
-        .await
-        .ok();
+    let document = state.upload_priming_document(request).await.map_err(|error| {
+        warn!(?error, "failed to ingest priming document");
+        StatusCode::BAD_REQUEST
+    })?;
     Ok(Json(document))
 }
 
 async fn delete_priming_document(
-    State(state): State<AppState>,
+    State(state): State<AppCoreState>,
     AxumPath(document_id): AxumPath<Uuid>,
 ) -> Result<Json<DeletePrimingDocumentResponse>, StatusCode> {
-    state
-        .storage
-        .delete_priming_document(document_id)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    state
-        .storage
-        .append_audit_event(None, &format!("priming_document_deleted:{document_id}"))
-        .await
-        .ok();
-    Ok(Json(DeletePrimingDocumentResponse { deleted: document_id }))
+    let response = state.delete_priming_document(document_id).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(response))
 }
 
 async fn put_settings(
-    State(state): State<AppState>,
-    Json(mut settings): Json<AppSettingsDto>,
+    State(state): State<AppCoreState>,
+    Json(settings): Json<AppSettingsDto>,
 ) -> Result<Json<AppSettingsDto>, StatusCode> {
-    if settings.assistant_instruction.trim().is_empty() {
-        settings.assistant_instruction = default_assistant_instruction();
-    }
-    if settings.openai_model.trim().is_empty() {
-        settings.openai_model = default_openai_model();
-    }
-    state.storage.save_settings(&settings).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    *state.settings.write().await = settings.clone();
-    Ok(Json(settings))
+    let saved = state.save_settings(settings).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(saved))
 }
 
 async fn get_sessions(
-    State(state): State<AppState>,
+    State(state): State<AppCoreState>,
 ) -> Result<Json<Vec<SessionSummaryDto>>, StatusCode> {
-    let sessions =
-        state.storage.list_sessions(100).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let sessions = state.list_sessions().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(sessions))
 }
 
 async fn get_session_detail(
-    State(state): State<AppState>,
+    State(state): State<AppCoreState>,
     AxumPath(session_id): AxumPath<Uuid>,
 ) -> Result<Json<SessionDetailDto>, StatusCode> {
-    let session = state
-        .storage
-        .get_session_detail(session_id)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let session = state.get_session_detail(session_id).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     session.map(Json).ok_or(StatusCode::NOT_FOUND)
 }
 
 async fn delete_session(
-    State(state): State<AppState>,
+    State(state): State<AppCoreState>,
     AxumPath(session_id): AxumPath<Uuid>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    if state.snapshot.read().await.session_id == Some(session_id) {
-        return Err(StatusCode::CONFLICT);
-    }
-    state
-        .storage
-        .delete_session(session_id)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    state.delete_session(session_id).await.map_err(|error| {
+        if error.to_string().contains("currently active session") {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    })?;
     Ok(Json(serde_json::json!({ "deleted": session_id })))
 }
 
 async fn post_purge_sessions(
-    State(state): State<AppState>,
+    State(state): State<AppCoreState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let settings = state.settings.read().await.clone();
-    let deleted = state
-        .storage
-        .purge_sessions_older_than_days(settings.retention_days)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let deleted = state.purge_sessions().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(serde_json::json!({ "deleted": deleted })))
 }
 
 async fn get_session_export(
-    State(state): State<AppState>,
+    State(state): State<AppCoreState>,
     AxumPath(session_id): AxumPath<Uuid>,
     Query(query): Query<SessionExportQuery>,
 ) -> Result<Response, StatusCode> {
-    let Some(session) = state
-        .storage
-        .get_session_detail(session_id)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    else {
+    let Some(session) = state.export_session(session_id, query.format.as_deref()).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)? else {
         return Err(StatusCode::NOT_FOUND);
     };
-
-    let format = query.format.as_deref().unwrap_or("json");
-    match format {
-        "markdown" | "md" => {
-            let body = render_session_markdown(&session);
-            Ok((
-                [(header::CONTENT_TYPE, HeaderValue::from_static("text/markdown; charset=utf-8"))],
-                body,
-            )
-                .into_response())
-        }
-        _ => Ok((
-            [(header::CONTENT_TYPE, HeaderValue::from_static("application/json"))],
-            serde_json::to_string_pretty(&session)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
-        )
-            .into_response()),
-    }
-}
-
-async fn extract_document_text(file_name: &str, mime_type: &str, bytes: &[u8]) -> Result<String> {
-    let extension =
-        file_name.rsplit('.').next().map(|value| value.to_ascii_lowercase()).unwrap_or_default();
-
-    let text = if is_text_like_mime(mime_type)
-        || matches!(
-            extension.as_str(),
-            "txt" | "md" | "markdown" | "json" | "html" | "htm" | "csv" | "log" | "yaml" | "yml"
-        ) {
-        String::from_utf8(bytes.to_vec()).context("document is not valid UTF-8 text")?
-    } else if mime_type == "application/pdf" || extension == "pdf" {
-        extract_pdf_text(bytes).await?
-    } else {
-        anyhow::bail!(
-            "Unsupported document format. Upload text, markdown, JSON, HTML, CSV, YAML, or PDF."
-        );
-    };
-
-    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let trimmed = normalized.trim();
-    if trimmed.is_empty() {
-        anyhow::bail!("The uploaded document did not contain usable text.");
-    }
-    if trimmed.chars().count() > 120_000 {
-        anyhow::bail!("The uploaded document is too large after text extraction.");
-    }
-
-    Ok(trimmed.to_string())
-}
-
-fn is_text_like_mime(mime_type: &str) -> bool {
-    mime_type.starts_with("text/")
-        || matches!(
-            mime_type,
-            "application/json"
-                | "application/ld+json"
-                | "application/xml"
-                | "application/xhtml+xml"
-                | "application/yaml"
-                | "application/x-yaml"
-        )
-}
-
-async fn extract_pdf_text(bytes: &[u8]) -> Result<String> {
-    let temp_path = std::env::temp_dir().join(format!("soundmind-upload-{}.pdf", Uuid::new_v4()));
-    fs::write(&temp_path, bytes).await.context("failed to stage uploaded PDF")?;
-
-    let output =
-        match Command::new("pdftotext").arg("-layout").arg(&temp_path).arg("-").output().await {
-            Ok(output) => output,
-            Err(error) => {
-                let _ = fs::remove_file(&temp_path).await;
-                if error.kind() == std::io::ErrorKind::NotFound {
-                    anyhow::bail!(
-                        "PDF upload requires `pdftotext` to be installed on this machine."
-                    );
-                }
-                return Err(error).context("failed to run pdftotext");
-            }
-        };
-    let _ = fs::remove_file(&temp_path).await;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        anyhow::bail!("Failed to extract PDF text: {stderr}");
-    }
-
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    Ok(([(header::CONTENT_TYPE, HeaderValue::from_static(session.content_type))], session.body)
+        .into_response())
 }
 
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
-}
-
-fn load_config() -> Result<RootConfig> {
-    let path = resolve_config_path()?;
-    let raw = std::fs::read_to_string(&path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
-    let mut config: RootConfig =
-        toml::from_str(&raw).with_context(|| format!("failed to parse {}", path.display()))?;
-
-    if let Ok(api_key) = std::env::var("OPENAI_API_KEY") {
-        if !api_key.trim().is_empty() {
-            config.providers.openai.enabled = true;
-        }
-    }
-
-    if let Ok(api_key) = std::env::var("ELEVENLABS_API_KEY") {
-        if !api_key.trim().is_empty() {
-            config.providers.elevenlabs.enabled = true;
-            if config.app.simulate_transcriber {
-                info!(
-                    "ELEVENLABS_API_KEY is present; overriding simulate_transcriber=true to use the live provider by default"
-                );
-                config.app.simulate_transcriber = false;
-            }
-        }
-    }
-
-    if let Ok(model) = std::env::var("ELEVENLABS_MODEL") {
-        if !model.trim().is_empty() {
-            config.providers.elevenlabs.model = model;
-        }
-    } else if config.providers.elevenlabs.model == "scribe_v1" {
-        info!(
-            "Overriding legacy realtime STT model scribe_v1 with scribe_v2_realtime for the ElevenLabs realtime endpoint"
-        );
-        config.providers.elevenlabs.model = "scribe_v2_realtime".to_string();
-    }
-
-    info!(
-        retention_days = if config.storage.retention_days == 0 {
-            "infinite".to_string()
-        } else {
-            config.storage.retention_days.to_string()
-        },
-        auto_start_cloud = config.app.auto_start_cloud,
-        simulate_transcriber = config.app.simulate_transcriber,
-        "loaded configuration"
-    );
-    Ok(config)
-}
-
-fn load_keys_env() {
-    for path in candidate_keys_env_paths() {
-        if path.exists() {
-            if let Err(error) = from_filename_override(&path) {
-                warn!(path = %path.display(), ?error, "failed to load keys.env");
-            } else {
-                info!(path = %path.display(), "loaded provider keys");
-            }
-            break;
-        }
-    }
-}
-
-fn resolve_config_path() -> Result<PathBuf> {
-    for path in candidate_config_paths() {
-        if path.exists() {
-            return Ok(path);
-        }
-    }
-
-    let searched = candidate_config_paths()
-        .into_iter()
-        .map(|path| path.display().to_string())
-        .collect::<Vec<_>>()
-        .join(", ");
-    anyhow::bail!("no config file found; searched {searched}")
-}
-
-fn candidate_config_paths() -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    if let Ok(explicit) = std::env::var("SOUNDMIND_CONFIG") {
-        if !explicit.trim().is_empty() {
-            paths.push(PathBuf::from(explicit));
-        }
-    }
-    paths.push(PathBuf::from("config.toml"));
-    if let Some(config_dir) = soundmind_config_dir() {
-        paths.push(config_dir.join("config.toml"));
-    }
-    paths.push(PathBuf::from("config.example.toml"));
-    paths
-}
-
-fn candidate_keys_env_paths() -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    if let Ok(explicit) = std::env::var("SOUNDMIND_KEYS_ENV") {
-        if !explicit.trim().is_empty() {
-            paths.push(PathBuf::from(explicit));
-        }
-    }
-    paths.push(PathBuf::from("keys.env"));
-    if let Some(config_dir) = soundmind_config_dir() {
-        paths.push(config_dir.join("keys.env"));
-    }
-    paths
-}
-
-fn soundmind_config_dir() -> Option<PathBuf> {
-    dirs::config_dir().map(|path| path.join("soundmind"))
-}
-
-fn sqlite_url(path: &str) -> String {
-    if path.starts_with("sqlite:") { path.to_string() } else { format!("sqlite://{path}") }
-}
-
-async fn load_or_initialize_settings(
-    storage: &Storage,
-    config: &RootConfig,
-) -> Result<AppSettingsDto> {
-    if let Some(settings) = storage.load_settings().await? {
-        return Ok(settings);
-    }
-
-    let settings = AppSettingsDto {
-        retention_days: config.storage.retention_days,
-        transcript_storage_enabled: true,
-        auto_start_cloud: config.app.auto_start_cloud,
-        default_mode: config.app.mode,
-        openai_model: default_openai_model(),
-        assistant_instruction: default_assistant_instruction(),
-    };
-    storage.save_settings(&settings).await?;
-    Ok(settings)
-}
-
-fn render_session_markdown(session: &SessionDetailDto) -> String {
-    let mut markdown = String::new();
-    markdown.push_str("# Soundmind Session Export\n\n");
-    markdown.push_str(&format!("Session ID: `{}`\n", session.session.id));
-    markdown.push_str(&format!("Started: {}\n", session.session.started_at.to_rfc3339()));
-    if let Some(ended_at) = session.session.ended_at {
-        markdown.push_str(&format!("Ended: {}\n", ended_at.to_rfc3339()));
-    }
-    markdown.push_str(&format!("Capture Device: {}\n", session.session.capture_device));
-    markdown.push_str(&format!("Mode: {}\n\n", session.session.mode));
-    markdown.push_str("## Transcript\n\n");
-    for segment in &session.transcript_segments {
-        markdown.push_str(&format!(
-            "- [{}-{} ms] {}\n",
-            segment.start_ms, segment.end_ms, segment.text
-        ));
-    }
-    markdown.push_str("\n## Assistant Events\n\n");
-    for event in &session.assistant_events {
-        markdown
-            .push_str(&format!("- {} ({:.2}): {}\n", event.kind, event.confidence, event.content));
-    }
-    markdown
 }
 
 #[cfg(test)]

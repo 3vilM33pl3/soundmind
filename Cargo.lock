@@ -58,6 +58,7 @@ name = "app_backend"
 version = "0.2.1"
 dependencies = [
  "anyhow",
+ "app_core",
  "audio_capture",
  "audio_pipeline",
  "axum",
@@ -81,6 +82,24 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "transcript_core",
+ "uuid",
+]
+
+[[package]]
+name = "app_core"
+version = "0.2.1"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "dirs",
+ "dotenvy",
+ "ipc_schema",
+ "serde",
+ "serde_json",
+ "storage_sqlite",
+ "tokio",
+ "toml 0.9.12+spec-1.1.0",
+ "tracing",
  "uuid",
 ]
 
