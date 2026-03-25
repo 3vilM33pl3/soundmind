@@ -645,6 +645,27 @@ textarea {
   font-size: 1rem;
 }
 
+.assistant-question {
+  margin-bottom: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.assistant-question-label {
+  font-size: 0.75rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.assistant-question-text {
+  margin-top: 6px;
+  font-size: 1.05rem;
+  line-height: 1.5;
+}
+
 .assistant-content p {
   margin: 0;
 }
@@ -841,7 +862,10 @@ textarea {
   box-shadow: 0 8px 18px rgba(45, 97, 120, 0.14);
   user-select: none;
   vertical-align: baseline;
-  margin-left: 0.45rem;
+}
+
+.transcript-paragraph > .question-inline-button {
+  margin-left: auto;
 }
 
 .question-inline-button.secondary {

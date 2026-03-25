@@ -24,10 +24,8 @@ fn run() -> Result<()> {
             install_tray(app)?;
             install_global_shortcuts(app.handle());
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.eval(&format!(
-                    "window.SOUNDMIND_VERSION = {:?};",
-                    env!("CARGO_PKG_VERSION")
-                ));
+                let _ = window
+                    .eval(&format!("window.SOUNDMIND_VERSION = {:?};", env!("CARGO_PKG_VERSION")));
             }
             Ok(())
         })
