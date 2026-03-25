@@ -296,7 +296,15 @@ function renderAssistantContent(content, kind = "Notice") {
 
 function renderAssistantCard(snapshot) {
   const latestAssistant = snapshot.latest_assistant;
-  const questionContext = currentQuestionContextForAssistant(latestAssistant?.kind);
+  if (!latestAssistant) {
+    els.assistantCard.innerHTML = `
+      <div class="assistant-meta">No assistant output yet.</div>
+      <div class="assistant-content">Trigger an action once transcript is available.</div>
+    `;
+    return;
+  }
+
+  const questionContext = currentQuestionContextForAssistant(latestAssistant.kind);
   const questionMarkup = questionContext
     ? `
       <div class="assistant-question">
@@ -306,20 +314,11 @@ function renderAssistantCard(snapshot) {
     `
     : "";
 
-  if (!latestAssistant) {
-    els.assistantCard.innerHTML = `
-      ${questionMarkup}
-      <div class="assistant-meta">No assistant output yet.</div>
-      <div class="assistant-content">Trigger an action once transcript is available.</div>
-    `;
-    return;
-  }
-
   els.assistantCard.innerHTML = `
-    ${questionMarkup}
     <div class="assistant-meta">
       ${escapeHtml(latestAssistant.kind)} • ${formatTime(latestAssistant.created_at)}
     </div>
+    ${questionMarkup}
     <div class="assistant-content">${renderAssistantContent(latestAssistant.content, latestAssistant.kind)}</div>
   `;
 }
@@ -615,16 +614,13 @@ function renderTranscriptMarkup({ segments, partialText, restoredTranscript, man
 
   const committedMarkup = segments.length
     ? buildTranscriptParagraphs(segments)
-        .map((paragraph) => {
-          const manualAnchorId = manualSelection?.segment_ids?.[manualSelection.segment_ids.length - 1];
-          const questionCandidates = paragraph.filter((segment) => segment.is_question_candidate);
-          const autoAnchorId = questionCandidates.length ? questionCandidates.at(-1).id : null;
-          const questionButtonId = manualAnchorId || autoAnchorId;
-          return `
+        .map(
+          (paragraph) => `
             <p class="transcript-paragraph">
               ${paragraph
                 .map((segment) => {
                   const classes = ["transcript-fragment"];
+                  const manualAnchorId = manualSelection?.segment_ids?.[manualSelection.segment_ids.length - 1];
                   const isManualQuestion = manualSelection?.segment_ids?.some(
                     (segmentId) => String(segmentId) === String(segment.id),
                   );
@@ -633,18 +629,21 @@ function renderTranscriptMarkup({ segments, partialText, restoredTranscript, man
                   } else if (segment.is_question_candidate) {
                     classes.push("transcript-question");
                   }
+                  const showManualButton = isManualQuestion && String(segment.id) === String(manualAnchorId);
+                  const showAutoButton = !isManualQuestion && segment.is_question_candidate;
+                  const questionButton = showManualButton || showAutoButton
+                    ? `<button class="question-inline-button secondary" data-question-segment-id="${segment.id}" title="${questionButtonTitle}">?</button>`
+                    : "";
                   return `
                     <span class="transcript-fragment-line">
                       <span class="${classes.join(" ")}" data-segment-id="${segment.id}">${escapeHtml(segment.text)}</span>
+                      ${questionButton}
                     </span>
                   `;
                 })
                 .join(" ")}
-              ${questionButtonId
-                ? `<button class="question-inline-button secondary" data-question-segment-id="${questionButtonId}" title="${questionButtonTitle}">?</button>`
-                : ""}
-            </p>`;
-        })
+            </p>`,
+        )
         .join("")
     : "";
 
