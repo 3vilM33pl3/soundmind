@@ -600,6 +600,7 @@ async fn handle_action(
         }
         UserAction::Stop => {
             upload_gate.mark_privacy_paused();
+            transcript.clear_partial();
             let mut locked = snapshot.write().await;
             locked.privacy_pause = true;
             locked.capture_state = CaptureState::Paused;

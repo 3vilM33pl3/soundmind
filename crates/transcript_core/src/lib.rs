@@ -43,6 +43,10 @@ impl TranscriptState {
         self.partial.as_ref().map(|partial| partial.text.as_str())
     }
 
+    pub fn clear_partial(&mut self) {
+        self.partial = None;
+    }
+
     pub fn segments(&self) -> &[TranscriptSegment] {
         &self.committed
     }
