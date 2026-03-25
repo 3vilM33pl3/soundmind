@@ -404,7 +404,6 @@ function updateTranscriptSelection() {
 
   state.transcriptSelection = nextSelection;
   state.stickyTranscriptSelection = nextSelection;
-  clearManualQuestionSelection();
   renderSelectionState();
 }
 
@@ -554,10 +553,10 @@ function currentTranscriptSegments() {
 }
 
 function currentDetectedQuestion() {
-  const manualSelection = currentManualQuestionSelection();
-  if (manualSelection?.selected_text) {
+  const activeSelection = currentActionSelection();
+  if (activeSelection?.selected_text) {
     return {
-      text: manualSelection.selected_text,
+      text: activeSelection.selected_text,
       start_ms: null,
       end_ms: null,
       manual: true,
@@ -1396,7 +1395,6 @@ document.querySelectorAll(".hero-actions [data-action]").forEach((button) => {
     if (selection) {
       state.transcriptSelection = selection;
       state.stickyTranscriptSelection = selection;
-      clearManualQuestionSelection();
       renderSelectionState();
     }
   });
