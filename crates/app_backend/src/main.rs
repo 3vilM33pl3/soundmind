@@ -11,6 +11,8 @@ use app_core::{AppCoreState, load_config, load_keys_env, sqlite_url};
 use app_core::CaptureSection;
 #[cfg(test)]
 use audio_pipeline::AudioChunk;
+#[cfg(test)]
+use ipc_schema::BackendStatusSnapshot;
 use storage_sqlite::Storage;
 use tokio::sync::mpsc;
 use tower_http::cors::CorsLayer;
