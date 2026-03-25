@@ -328,7 +328,7 @@ function currentQuestionContextForAssistant(kind) {
     return null;
   }
 
-  const selection = currentManualQuestionSelection() || state.transcriptSelection || state.stickyTranscriptSelection;
+  const selection = currentActionSelection();
   if (selection && selection.selected_text.trim()) {
     return selection.selected_text.trim();
   }
@@ -366,6 +366,13 @@ function bindTranscriptInteractions() {
         return;
       }
 
+      const segment = currentTranscriptSegments().find(
+        (candidate) => String(candidate.id) === String(segmentId),
+      );
+      const promotedSelection = segment
+        ? { selected_text: segment.text, segment_ids: [segment.id] }
+        : null;
+
       try {
         await runWithButtonFeedback(
           button,
@@ -373,6 +380,10 @@ function bindTranscriptInteractions() {
             await sendAction({ AnswerQuestionBySegment: { segment_id: segmentId } });
             const snapshot = await fetchHealth();
             renderSnapshot(snapshot);
+            if (promotedSelection) {
+              promoteManualQuestionSelection(promotedSelection);
+              renderTranscriptPanel();
+            }
           },
           { pending: "Answering...", success: "Answer Ready", error: "Answer Failed" },
         );
@@ -433,8 +444,12 @@ function selectionIsInsideTranscript(range) {
     : container.contains(commonAncestor.parentElement);
 }
 
+function currentActionSelection() {
+  return state.transcriptSelection || state.stickyTranscriptSelection || currentManualQuestionSelection();
+}
+
 function renderSelectionState() {
-  const selection = state.transcriptSelection || state.stickyTranscriptSelection;
+  const selection = currentActionSelection();
   const restoredTranscript = isRestoredTranscriptView();
 
   els.actionAnswerButton.disabled = restoredTranscript;
@@ -488,6 +503,7 @@ function clearTranscriptSelection() {
   }
   state.transcriptSelection = null;
   state.stickyTranscriptSelection = null;
+  clearManualQuestionSelection();
   renderSelectionState();
 }
 
@@ -752,10 +768,13 @@ function promoteManualQuestionSelection(selection) {
     return;
   }
 
-  state.manualQuestionSelection = {
+  const promotedSelection = {
     selected_text: String(selection.selected_text || "").trim(),
     segment_ids: [...new Set(selection.segment_ids)],
   };
+  state.manualQuestionSelection = promotedSelection;
+  state.transcriptSelection = null;
+  state.stickyTranscriptSelection = promotedSelection;
   state.manualQuestionSelectionSessionId = currentTranscriptSessionId();
   state.lastManualQuestionSelectionKey = null;
 }
@@ -820,7 +839,7 @@ function renderQuestionBanner(question, restoredTranscript = false) {
       <div class="question-label">Question status</div>
       <div class="question-body">No question detected right now.</div>
     `;
-    if (!state.transcriptSelection) {
+    if (!currentActionSelection()) {
       els.actionAnswerButton.textContent = "Answer Last Question";
     }
     return;
@@ -832,7 +851,7 @@ function renderQuestionBanner(question, restoredTranscript = false) {
     <div class="question-body">${escapeHtml(question.text)}</div>
     ${question.manual ? "" : `<div class="question-meta">${question.start_ms}-${question.end_ms} ms</div>`}
   `;
-  if (!state.transcriptSelection) {
+  if (!currentActionSelection()) {
     els.actionAnswerButton.textContent = question.manual ? "Answer Selection" : "Answer Detected Question";
   }
 }
@@ -1250,7 +1269,7 @@ function actionLabels(action) {
 }
 
 function resolvePrimaryAction(action) {
-  const selection = state.transcriptSelection || state.stickyTranscriptSelection;
+  const selection = currentActionSelection();
   if (!selection) {
     return action;
   }
