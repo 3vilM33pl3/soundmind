@@ -328,7 +328,7 @@ function currentQuestionContextForAssistant(kind) {
     return null;
   }
 
-  const selection = currentActionSelection();
+  const selection = currentManualQuestionSelection() || currentActionSelection();
   if (selection && selection.selected_text.trim()) {
     return selection.selected_text.trim();
   }
@@ -449,6 +449,7 @@ function currentActionSelection() {
 
 function renderSelectionState() {
   const selection = currentActionSelection();
+  const promotedSelection = currentManualQuestionSelection();
   const restoredTranscript = isRestoredTranscriptView();
 
   els.actionAnswerButton.disabled = restoredTranscript;
@@ -483,9 +484,19 @@ function renderSelectionState() {
   }
 
   els.selectionStatus.className = "selection-status active";
-  els.selectionStatus.textContent = selection.segment_ids.length
-    ? `Selection active across ${selection.segment_ids.length} segment${selection.segment_ids.length === 1 ? "" : "s"}. Top actions now target the selected excerpt.`
-    : "Selection active in the live transcript text. Top actions now target the selected excerpt.";
+  if (
+    promotedSelection &&
+    selection &&
+    selection.selected_text !== promotedSelection.selected_text
+  ) {
+    els.selectionStatus.textContent = selection.segment_ids.length
+      ? `New selection active across ${selection.segment_ids.length} segment${selection.segment_ids.length === 1 ? "" : "s"}. Top actions will target it, while the previous answered highlight stays visible.`
+      : "New selection active. Top actions will target it, while the previous answered highlight stays visible.";
+  } else {
+    els.selectionStatus.textContent = selection.segment_ids.length
+      ? `Selection active across ${selection.segment_ids.length} segment${selection.segment_ids.length === 1 ? "" : "s"}. Top actions now target the selected excerpt.`
+      : "Selection active in the live transcript text. Top actions now target the selected excerpt.";
+  }
   els.clearSelectionButton.disabled = false;
   els.actionAnswerButton.disabled = false;
   els.actionSummaryButton.disabled = false;
@@ -553,10 +564,10 @@ function currentTranscriptSegments() {
 }
 
 function currentDetectedQuestion() {
-  const activeSelection = currentActionSelection();
-  if (activeSelection?.selected_text) {
+  const promotedSelection = currentManualQuestionSelection();
+  if (promotedSelection?.selected_text) {
     return {
-      text: activeSelection.selected_text,
+      text: promotedSelection.selected_text,
       start_ms: null,
       end_ms: null,
       manual: true,
