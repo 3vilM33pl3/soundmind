@@ -160,10 +160,23 @@ fn render(
         }));
     }
 
-    lines.extend([String::new(), "Latest assistant output:".to_string()]);
-
-    if let Some(assistant) = &snapshot.latest_assistant {
+    lines.extend([String::new(), "Manual assistant:".to_string()]);
+    if let Some(assistant) = &snapshot.manual_assistant {
         lines.push(format!("{:?} @ {}:", assistant.kind, assistant.created_at.to_rfc3339()));
+        if let Some(question_text) = &assistant.question_text {
+            lines.push(format!("Q: {}", question_text));
+        }
+        lines.push(assistant.content.clone());
+    } else {
+        lines.push("-".to_string());
+    }
+
+    lines.extend([String::new(), "Automatic assistant:".to_string()]);
+    if let Some(assistant) = &snapshot.automatic_assistant {
+        lines.push(format!("{:?} @ {}:", assistant.kind, assistant.created_at.to_rfc3339()));
+        if let Some(question_text) = &assistant.question_text {
+            lines.push(format!("Q: {}", question_text));
+        }
         lines.push(assistant.content.clone());
     } else {
         lines.push("-".to_string());

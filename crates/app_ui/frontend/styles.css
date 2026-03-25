@@ -377,6 +377,29 @@ h4 {
   border-color: rgba(188, 90, 51, 0.18);
 }
 
+.assistant-stack {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.assistant-box {
+  display: grid;
+  gap: 10px;
+}
+
+.assistant-box-head h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.assistant-box-head p {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+  line-height: 1.5;
+  font-size: 0.94rem;
+}
+
 button,
 select,
 input {
@@ -761,6 +784,10 @@ textarea {
 .assistant-card,
 .error-item {
   padding: 16px 18px;
+}
+
+.assistant-card {
+  min-height: 10rem;
 }
 
 .transcript-flow {

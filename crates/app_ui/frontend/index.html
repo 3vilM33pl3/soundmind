@@ -68,11 +68,29 @@
             <section class="panel panel-assistant">
               <div class="panel-head">
                 <h2>Assistant</h2>
-                <p>Latest answer, summary, or commentary appears here while the transcript stays interactive.</p>
+                <p>Manual answers stay separate from the assisted latest-question answer so you can keep both visible.</p>
               </div>
-              <div class="assistant-card assistant-card-prominent" id="assistant-card">
-                <div class="assistant-meta">No assistant output yet.</div>
-                <div class="assistant-content">Trigger an action once transcript is available.</div>
+              <div class="assistant-stack">
+                <section class="assistant-box">
+                  <div class="assistant-box-head">
+                    <h3>Manual Response</h3>
+                    <p>Filled only when you click an action button or an inline <code>?</code>.</p>
+                  </div>
+                  <div class="assistant-card assistant-card-prominent" id="manual-assistant-card">
+                    <div class="assistant-meta">No manual response yet.</div>
+                    <div class="assistant-content">Trigger an action once transcript is available.</div>
+                  </div>
+                </section>
+                <section class="assistant-box">
+                  <div class="assistant-box-head">
+                    <h3>Latest Detected Question</h3>
+                    <p>In Assisted mode, each newly committed detected question is answered here automatically.</p>
+                  </div>
+                  <div class="assistant-card" id="automatic-assistant-card">
+                    <div class="assistant-meta">No assisted question answer yet.</div>
+                    <div class="assistant-content">Switch to Assisted mode to auto-answer the latest detected question.</div>
+                  </div>
+                </section>
               </div>
               <div class="error-list" id="error-list">
                 <div class="empty-state">No recent backend errors.</div>

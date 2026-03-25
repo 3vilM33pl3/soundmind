@@ -35,7 +35,8 @@ const els = {
   questionBanner: document.querySelector("#question-banner"),
   partialBox: document.querySelector("#partial-box"),
   segmentList: document.querySelector("#segment-list"),
-  assistantCard: document.querySelector("#assistant-card"),
+  manualAssistantCard: document.querySelector("#manual-assistant-card"),
+  automaticAssistantCard: document.querySelector("#automatic-assistant-card"),
   actionAnswerButton: document.querySelector("#action-answer-button"),
   actionSummaryButton: document.querySelector("#action-summary-button"),
   actionCommentButton: document.querySelector("#action-comment-button"),
@@ -244,7 +245,7 @@ function renderSnapshot(snapshot) {
   els.privacyBackend.textContent = backendUrl;
   renderTranscriptPanel();
 
-  renderAssistantCard(snapshot);
+  renderAssistantCards(snapshot);
 
   const recentErrors = snapshot.recent_errors.filter((error) => error.trim().length > 0);
   if (!recentErrors.length) {
@@ -294,46 +295,81 @@ function renderAssistantContent(content, kind = "Notice") {
   return lines.map((line) => `<p>${escapeHtml(line)}</p>`).join("");
 }
 
-function renderAssistantCard(snapshot) {
-  const latestAssistant = snapshot.latest_assistant;
-  if (!latestAssistant) {
-    els.assistantCard.innerHTML = `
-      <div class="assistant-meta">No assistant output yet.</div>
-      <div class="assistant-content">Trigger an action once transcript is available.</div>
+function renderAssistantCards(snapshot) {
+  renderAssistantCard(
+    els.manualAssistantCard,
+    snapshot.manual_assistant,
+    {
+      emptyMeta: "No manual response yet.",
+      emptyContent: "Trigger an action once transcript is available.",
+      fallbackQuestion: currentManualQuestionContext(),
+    },
+  );
+
+  renderAssistantCard(
+    els.automaticAssistantCard,
+    snapshot.automatic_assistant,
+    {
+      emptyMeta: "No assisted question answer yet.",
+      emptyContent:
+        snapshot.mode === "Assisted"
+          ? "Waiting for a newly committed detected question."
+          : "Switch to Assisted mode to auto-answer the latest detected question.",
+      fallbackQuestion: snapshot.detected_question?.text?.trim() || null,
+      emptyQuestion: snapshot.detected_question?.text?.trim() || null,
+    },
+  );
+}
+
+function renderAssistantCard(cardElement, assistant, options) {
+  if (!cardElement) {
+    return;
+  }
+
+  if (!assistant) {
+    const emptyQuestionMarkup = options.emptyQuestion
+      ? `
+        <div class="assistant-question">
+          <div class="assistant-question-label">Question</div>
+          <div class="assistant-question-text">${escapeHtml(options.emptyQuestion)}</div>
+        </div>
+      `
+      : "";
+    cardElement.innerHTML = `
+      <div class="assistant-meta">${escapeHtml(options.emptyMeta)}</div>
+      ${emptyQuestionMarkup}
+      <div class="assistant-content">${escapeHtml(options.emptyContent)}</div>
     `;
     return;
   }
 
-  const questionContext = currentQuestionContextForAssistant(latestAssistant.kind);
+  const questionContext = assistant.question_text?.trim() || options.fallbackQuestion || null;
+  const questionLabel = assistant.kind === "Answer" ? "Question" : "Focus";
   const questionMarkup = questionContext
     ? `
       <div class="assistant-question">
-        <div class="assistant-question-label">Question</div>
+        <div class="assistant-question-label">${questionLabel}</div>
         <div class="assistant-question-text">${escapeHtml(questionContext)}</div>
       </div>
     `
     : "";
-  const cachedBadge = latestAssistant.reused_from_history
+  const cachedBadge = assistant.reused_from_history
     ? `<span class="reuse-badge">From History</span>`
     : "";
-  const modelLabel = latestAssistant.source_model
-    ? `<span class="assistant-model">${escapeHtml(latestAssistant.source_model)}</span>`
+  const modelLabel = assistant.source_model
+    ? `<span class="assistant-model">${escapeHtml(assistant.source_model)}</span>`
     : "";
 
-  els.assistantCard.innerHTML = `
+  cardElement.innerHTML = `
     <div class="assistant-meta">
-      ${escapeHtml(latestAssistant.kind)} • ${formatTime(latestAssistant.created_at)} ${modelLabel} ${cachedBadge}
+      ${escapeHtml(assistant.kind)} • ${formatTime(assistant.created_at)} ${modelLabel} ${cachedBadge}
     </div>
     ${questionMarkup}
-    <div class="assistant-content">${renderAssistantContent(latestAssistant.content, latestAssistant.kind)}</div>
+    <div class="assistant-content">${renderAssistantContent(assistant.content, assistant.kind)}</div>
   `;
 }
 
-function currentQuestionContextForAssistant(kind) {
-  if (kind !== "Answer") {
-    return null;
-  }
-
+function currentManualQuestionContext() {
   const selection = currentManualQuestionSelection() || currentActionSelection();
   if (selection && selection.selected_text.trim()) {
     return selection.selected_text.trim();
@@ -1037,7 +1073,7 @@ function renderSessionDetail() {
           (event) => `
             <article class="detail-row">
               <div class="segment-meta">
-                ${escapeHtml(event.kind)} • ${formatTime(event.created_at)}
+                ${escapeHtml(formatAssistantEventKind(event))} • ${formatTime(event.created_at)}
                 ${event.model_id ? `<span class="assistant-model">${escapeHtml(event.model_id)}</span>` : ""}
                 ${event.reused_from_history ? `<span class="reuse-badge">From History</span>` : ""}
               </div>
@@ -1154,6 +1190,29 @@ function escapeHtml(value) {
 
 function formatTime(value) {
   return new Date(value).toLocaleString();
+}
+
+function formatAssistantEventKind(event) {
+  const requestKind = (event.request_kind || "").trim();
+  switch (event.kind) {
+    case "manual_answer":
+      return "Manual answer";
+    case "manual_summary":
+      return "Manual summary";
+    case "manual_commentary":
+      return "Manual commentary";
+    case "automatic_answer":
+      return "Automatic answer";
+    case "automatic_summary":
+      return "Automatic summary";
+    case "automatic_commentary":
+      return "Automatic commentary";
+    default:
+      if (requestKind === "answer") return "Answer";
+      if (requestKind === "summary") return "Summary";
+      if (requestKind === "commentary") return "Commentary";
+      return event.kind || "Assistant";
+  }
 }
 
 function preferredTheme() {
