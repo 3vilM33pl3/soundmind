@@ -335,10 +335,24 @@ h4 {
   margin-bottom: 18px;
 }
 
-.panel-head-actions {
-  margin-top: 12px;
+.panel-head-row {
   display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.panel-head-actions {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
   justify-content: flex-end;
+  margin-left: auto;
+}
+
+.field-inline {
+  min-width: 240px;
 }
 
 .panel-head p {
@@ -474,6 +488,12 @@ button.ghost.is-pending {
 .field span {
   font-size: 0.92rem;
   color: var(--muted);
+}
+
+.field-inline span {
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .field small {

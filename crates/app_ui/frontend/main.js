@@ -40,6 +40,7 @@ const els = {
   themeToggle: document.querySelector("#theme-toggle"),
   errorList: document.querySelector("#error-list"),
   settingsMode: document.querySelector("#settings-mode"),
+  openaiModel: document.querySelector("#openai-model"),
   retentionDays: document.querySelector("#retention-days"),
   transcriptStorage: document.querySelector("#transcript-storage"),
   autoStartCloud: document.querySelector("#auto-start-cloud"),
@@ -634,6 +635,7 @@ function renderQuestionBanner(question, restoredTranscript = false) {
 function renderSettings(settings) {
   state.settings = settings;
   els.settingsMode.value = settings.default_mode;
+  els.openaiModel.value = settings.openai_model || "gpt-4o-mini";
   els.retentionDays.value = String(settings.retention_days);
   els.transcriptStorage.checked = settings.transcript_storage_enabled;
   els.autoStartCloud.checked = settings.auto_start_cloud;
@@ -901,6 +903,7 @@ function buildSettingsPayload() {
     transcript_storage_enabled: els.transcriptStorage.checked,
     auto_start_cloud: els.autoStartCloud.checked,
     default_mode: els.settingsMode.value,
+    openai_model: els.openaiModel.value.trim() || "gpt-4o-mini",
     assistant_instruction: els.assistantInstruction.value.trim(),
   };
 }
@@ -1065,9 +1068,14 @@ async function handleSettingsSave() {
     if (!previousSettings || previousSettings.auto_start_cloud !== saved.auto_start_cloud) {
       await sendAction(saved.auto_start_cloud ? "ResumeCloud" : "PauseCloud");
     }
+    if (!previousSettings || previousSettings.openai_model !== saved.openai_model) {
+      els.settingsNote.textContent = `OpenAI model switched to ${saved.openai_model}.`;
+    }
     const snapshot = await fetchHealth();
     renderSnapshot(snapshot);
-    els.settingsNote.textContent = "Settings saved and applied.";
+    if (!previousSettings || previousSettings.openai_model === saved.openai_model) {
+      els.settingsNote.textContent = "Settings saved and applied.";
+    }
   } catch (error) {
     renderDisconnected(error);
   }
@@ -1212,6 +1220,14 @@ els.saveSettings.addEventListener("click", async () => {
       () => handleSettingsSave(),
       { pending: "Saving...", success: "Saved", error: "Save Failed" },
     );
+  } catch (error) {
+    renderDisconnected(error);
+  }
+});
+
+els.openaiModel.addEventListener("change", async () => {
+  try {
+    await handleSettingsSave();
   } catch (error) {
     renderDisconnected(error);
   }

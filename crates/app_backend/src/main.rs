@@ -19,10 +19,10 @@ use chrono::Utc;
 use context_engine::{last_question_candidate, recent_transcript_window};
 use dotenvy::from_filename_override;
 use ipc_schema::{
-    AppMode, AppSettingsDto, AssistantKind, AssistantOutput, BackendStatusSnapshot,
-    CaptureState, CloudState, PrimingDocumentDto, SessionDetailDto, SessionSummaryDto,
-    TranscriptSegmentDto, TranscriptSelectionPayload, TranscriptSnapshot, UserAction,
-    default_assistant_instruction,
+    AppMode, AppSettingsDto, AssistantKind, AssistantOutput, BackendStatusSnapshot, CaptureState,
+    CloudState, PrimingDocumentDto, SessionDetailDto, SessionSummaryDto, TranscriptSegmentDto,
+    TranscriptSelectionPayload, TranscriptSnapshot, UserAction, default_assistant_instruction,
+    default_openai_model,
 };
 use llm_openai::{
     AssistantContextInput, OpenAiConfig, OpenAiReasoner, PrimingDocumentInput, ResponseMode,
@@ -281,7 +281,6 @@ async fn run_runtime(
     let runtime_settings = settings.read().await.clone();
     let openai = OpenAiReasoner::new(OpenAiConfig {
         api_key: std::env::var("OPENAI_API_KEY").ok(),
-        model: std::env::var("OPENAI_MODEL").unwrap_or(config.providers.openai.model.clone()),
         enabled: config.providers.openai.enabled,
     });
 
@@ -662,7 +661,11 @@ async fn handle_action(
                 ResponseMode::AnswerQuestion,
                 "answer",
                 transcript_window_for_selection(transcript, &selection),
-                selection_focus_excerpt(transcript, &selection.segment_ids, Some(&selection.selected_text)),
+                selection_focus_excerpt(
+                    transcript,
+                    &selection.segment_ids,
+                    Some(&selection.selected_text),
+                ),
                 session_id,
                 snapshot,
                 storage,
@@ -700,7 +703,11 @@ async fn handle_action(
                 ResponseMode::SummariseRecent,
                 "summary",
                 transcript_window_for_selection(transcript, &selection),
-                selection_focus_excerpt(transcript, &selection.segment_ids, Some(&selection.selected_text)),
+                selection_focus_excerpt(
+                    transcript,
+                    &selection.segment_ids,
+                    Some(&selection.selected_text),
+                ),
                 session_id,
                 snapshot,
                 storage,
@@ -738,7 +745,11 @@ async fn handle_action(
                 ResponseMode::Commentary,
                 "commentary",
                 transcript_window_for_selection(transcript, &selection),
-                selection_focus_excerpt(transcript, &selection.segment_ids, Some(&selection.selected_text)),
+                selection_focus_excerpt(
+                    transcript,
+                    &selection.segment_ids,
+                    Some(&selection.selected_text),
+                ),
                 session_id,
                 snapshot,
                 storage,
@@ -810,7 +821,12 @@ async fn maybe_generate_response(
 
     snapshot.write().await.cloud_state = CloudState::LlmActive;
     let assistant_context = build_assistant_context(settings, storage, focus_excerpt).await?;
-    let response = openai.respond(mode, &window, &assistant_context).await?;
+    let model = {
+        let settings = settings.read().await;
+        let model = settings.openai_model.trim();
+        if model.is_empty() { default_openai_model() } else { model.to_string() }
+    };
+    let response = openai.respond(&model, mode, &window, &assistant_context).await?;
 
     if !response.should_respond {
         if manual_trigger {
@@ -867,7 +883,8 @@ async fn maybe_auto_generate_assistant(
     let now = Utc::now();
 
     if let Some(question) = transcript.last_question_candidate() {
-        if question.id == committed_segment.id && policy.should_auto_answer_question(question.id, now)
+        if question.id == committed_segment.id
+            && policy.should_auto_answer_question(question.id, now)
         {
             let generated = maybe_generate_response(
                 ResponseMode::AnswerQuestion,
@@ -1014,10 +1031,7 @@ fn transcript_window_for_segment_ids(
         }
     }
 
-    included_indices
-        .into_iter()
-        .filter_map(|index| committed.get(index).cloned())
-        .collect()
+    included_indices.into_iter().filter_map(|index| committed.get(index).cloned()).collect()
 }
 
 async fn push_error(snapshot: &Arc<RwLock<BackendStatusSnapshot>>, message: String) {
@@ -1151,9 +1165,8 @@ async fn post_priming_document(
         .filter(|mime_type| !mime_type.trim().is_empty())
         .unwrap_or_else(|| "application/octet-stream".to_string());
 
-    let extracted_text = extract_document_text(&request.file_name, &mime_type, &decoded)
-        .await
-        .map_err(|error| {
+    let extracted_text =
+        extract_document_text(&request.file_name, &mime_type, &decoded).await.map_err(|error| {
             warn!(?error, file_name = %request.file_name, "failed to ingest priming document");
             StatusCode::BAD_REQUEST
         })?;
@@ -1194,6 +1207,9 @@ async fn put_settings(
 ) -> Result<Json<AppSettingsDto>, StatusCode> {
     if settings.assistant_instruction.trim().is_empty() {
         settings.assistant_instruction = default_assistant_instruction();
+    }
+    if settings.openai_model.trim().is_empty() {
+        settings.openai_model = default_openai_model();
     }
     state.storage.save_settings(&settings).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     *state.settings.write().await = settings.clone();
@@ -1281,16 +1297,14 @@ async fn get_session_export(
 }
 
 async fn extract_document_text(file_name: &str, mime_type: &str, bytes: &[u8]) -> Result<String> {
-    let extension = file_name
-        .rsplit('.')
-        .next()
-        .map(|value| value.to_ascii_lowercase())
-        .unwrap_or_default();
+    let extension =
+        file_name.rsplit('.').next().map(|value| value.to_ascii_lowercase()).unwrap_or_default();
 
-    let text = if is_text_like_mime(mime_type) || matches!(
-        extension.as_str(),
-        "txt" | "md" | "markdown" | "json" | "html" | "htm" | "csv" | "log" | "yaml" | "yml"
-    ) {
+    let text = if is_text_like_mime(mime_type)
+        || matches!(
+            extension.as_str(),
+            "txt" | "md" | "markdown" | "json" | "html" | "htm" | "csv" | "log" | "yaml" | "yml"
+        ) {
         String::from_utf8(bytes.to_vec()).context("document is not valid UTF-8 text")?
     } else if mime_type == "application/pdf" || extension == "pdf" {
         extract_pdf_text(bytes).await?
@@ -1329,24 +1343,19 @@ async fn extract_pdf_text(bytes: &[u8]) -> Result<String> {
     let temp_path = std::env::temp_dir().join(format!("soundmind-upload-{}.pdf", Uuid::new_v4()));
     fs::write(&temp_path, bytes).await.context("failed to stage uploaded PDF")?;
 
-    let output = match Command::new("pdftotext")
-        .arg("-layout")
-        .arg(&temp_path)
-        .arg("-")
-        .output()
-        .await
-    {
-        Ok(output) => output,
-        Err(error) => {
-            let _ = fs::remove_file(&temp_path).await;
-            if error.kind() == std::io::ErrorKind::NotFound {
-                anyhow::bail!(
-                    "PDF upload requires `pdftotext` to be installed on this machine."
-                );
+    let output =
+        match Command::new("pdftotext").arg("-layout").arg(&temp_path).arg("-").output().await {
+            Ok(output) => output,
+            Err(error) => {
+                let _ = fs::remove_file(&temp_path).await;
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    anyhow::bail!(
+                        "PDF upload requires `pdftotext` to be installed on this machine."
+                    );
+                }
+                return Err(error).context("failed to run pdftotext");
             }
-            return Err(error).context("failed to run pdftotext");
-        }
-    };
+        };
     let _ = fs::remove_file(&temp_path).await;
 
     if !output.status.success() {
@@ -1488,6 +1497,7 @@ async fn load_or_initialize_settings(
         transcript_storage_enabled: true,
         auto_start_cloud: config.app.auto_start_cloud,
         default_mode: config.app.mode,
+        openai_model: default_openai_model(),
         assistant_instruction: default_assistant_instruction(),
     };
     storage.save_settings(&settings).await?;

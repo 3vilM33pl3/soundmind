@@ -29,7 +29,6 @@ pub struct AssistantContextInput {
 #[derive(Debug, Clone)]
 pub struct OpenAiConfig {
     pub api_key: Option<String>,
-    pub model: String,
     pub enabled: bool,
 }
 
@@ -61,6 +60,7 @@ impl OpenAiReasoner {
 
     pub async fn respond(
         &self,
+        model: &str,
         mode: ResponseMode,
         transcript: &[TranscriptSegment],
         context: &AssistantContextInput,
@@ -84,7 +84,7 @@ impl OpenAiReasoner {
         });
 
         let body = json!({
-            "model": self.config.model,
+            "model": model,
             "input": prompt,
             "text": {
                 "format": {
@@ -151,9 +151,7 @@ fn build_prompt(
 
     format!(
         "Primary assistant instruction:\n{}\n\nPriming documents:\n{}{}\n\nTask:\n{instruction}\nReturn strict JSON with mode, should_respond, answer, and confidence.\nFormat answer as plain text bullet lines only, using '-' prefixes and short lines. Do not return a prose paragraph unless there is only one point to make. Optimize for fast reading during a live interview. If a selected focus excerpt is provided, prioritize it while still using nearby transcript context. Ground your response in the transcript and uploaded documents. Do not invent credentials, experience, or facts not supported by the provided context.\nTranscript:\n{rendered}",
-        context.instruction,
-        priming,
-        focus_excerpt,
+        context.instruction, priming, focus_excerpt,
     )
 }
 

@@ -81,10 +81,23 @@
 
             <section class="panel panel-transcript">
               <div class="panel-head">
-                <h2>Live Transcript</h2>
-                <p id="transcript-hint">Scroll continuously, click `?` beside detected questions, or select text and use the action bar above.</p>
-                <div class="panel-head-actions">
-                  <button id="transcript-return-live" class="ghost" hidden>Return to Live</button>
+                <div class="panel-head-row">
+                  <div>
+                    <h2>Live Transcript</h2>
+                    <p id="transcript-hint">Scroll continuously, click `?` beside detected questions, or select text and use the action bar above.</p>
+                  </div>
+                  <div class="panel-head-actions">
+                    <label class="field field-inline">
+                      <span>Model</span>
+                      <select id="openai-model">
+                        <option value="gpt-4o-mini">gpt-4o-mini - Fast default</option>
+                        <option value="gpt-4.1-mini">gpt-4.1-mini - Smaller reasoning model</option>
+                        <option value="gpt-4o">gpt-4o - Higher quality</option>
+                        <option value="gpt-5">gpt-5 - Strongest available</option>
+                      </select>
+                    </label>
+                    <button id="transcript-return-live" class="ghost" hidden>Return to Live</button>
+                  </div>
                 </div>
               </div>
               <div class="question-banner question-banner-idle" id="question-banner">
