@@ -538,6 +538,16 @@ function currentTranscriptSegments() {
 }
 
 function currentDetectedQuestion() {
+  const manualSelection = currentManualQuestionSelection();
+  if (manualSelection?.selected_text) {
+    return {
+      text: manualSelection.selected_text,
+      start_ms: null,
+      end_ms: null,
+      manual: true,
+    };
+  }
+
   if (isRestoredTranscriptView()) {
     return [...currentTranscriptSegments()].reverse().find((segment) => segment.is_question_candidate) || null;
   }
@@ -645,6 +655,7 @@ function renderTranscriptParagraph(paragraph, manualSelection, questionButtonTit
   const manualAnchorId = manualSelection?.segment_ids?.length
     ? String(manualSelection.segment_ids[manualSelection.segment_ids.length - 1])
     : null;
+  const suppressAutoQuestions = manualIds.size > 0;
   const parts = [];
 
   for (let index = 0; index < paragraph.length; index += 1) {
@@ -661,7 +672,7 @@ function renderTranscriptParagraph(paragraph, manualSelection, questionButtonTit
       continue;
     }
 
-    parts.push(renderStandardTranscriptSegment(segment, questionButtonTitle));
+    parts.push(renderStandardTranscriptSegment(segment, questionButtonTitle, suppressAutoQuestions));
   }
 
   return parts.join(" ");
@@ -687,12 +698,12 @@ function renderManualTranscriptRun(run, manualAnchorId, questionButtonTitle) {
   `;
 }
 
-function renderStandardTranscriptSegment(segment, questionButtonTitle) {
+function renderStandardTranscriptSegment(segment, questionButtonTitle, suppressAutoQuestions = false) {
   const classes = ["transcript-fragment"];
-  if (segment.is_question_candidate) {
+  if (!suppressAutoQuestions && segment.is_question_candidate) {
     classes.push("transcript-question");
   }
-  const questionButton = segment.is_question_candidate
+  const questionButton = !suppressAutoQuestions && segment.is_question_candidate
     ? `<button class="question-inline-button secondary" data-question-segment-id="${segment.id}" title="${questionButtonTitle}">?</button>`
     : "";
 
@@ -796,9 +807,9 @@ function renderQuestionBanner(question, restoredTranscript = false) {
   if (restoredTranscript && question) {
     els.questionBanner.className = "question-banner question-banner-detected";
     els.questionBanner.innerHTML = `
-      <div class="question-label">Stored question</div>
+      <div class="question-label">${question.manual ? "Selected excerpt" : "Stored question"}</div>
       <div class="question-body">${escapeHtml(question.text)}</div>
-      <div class="question-meta">${question.start_ms}-${question.end_ms} ms</div>
+      ${question.manual ? "" : `<div class="question-meta">${question.start_ms}-${question.end_ms} ms</div>`}
     `;
     return;
   }
@@ -817,12 +828,12 @@ function renderQuestionBanner(question, restoredTranscript = false) {
 
   els.questionBanner.className = "question-banner question-banner-detected";
   els.questionBanner.innerHTML = `
-    <div class="question-label">Question detected</div>
+    <div class="question-label">${question.manual ? "Selected excerpt" : "Question detected"}</div>
     <div class="question-body">${escapeHtml(question.text)}</div>
-    <div class="question-meta">${question.start_ms}-${question.end_ms} ms</div>
+    ${question.manual ? "" : `<div class="question-meta">${question.start_ms}-${question.end_ms} ms</div>`}
   `;
   if (!state.transcriptSelection) {
-    els.actionAnswerButton.textContent = "Answer Detected Question";
+    els.actionAnswerButton.textContent = question.manual ? "Answer Selection" : "Answer Detected Question";
   }
 }
 
