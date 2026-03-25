@@ -218,7 +218,6 @@ impl ScribeRealtimeTranscriber {
         let payload = json!({
             "message_type": "input_audio_chunk",
             "audio_base_64": BASE64_STANDARD.encode(pcm_bytes),
-            "commit": true,
             "sample_rate": self.config.sample_rate_hz,
         });
 
@@ -279,7 +278,7 @@ fn next_backoff(current: Duration) -> Duration {
 
 fn build_request(config: &ScribeRealtimeConfig) -> Result<Request<()>> {
     let mut url = format!(
-        "wss://api.elevenlabs.io/v1/speech-to-text/realtime?model_id={}&include_timestamps={}&audio_format=pcm_16000&commit_strategy=manual&enable_logging={}",
+        "wss://api.elevenlabs.io/v1/speech-to-text/realtime?model_id={}&include_timestamps={}&audio_format=pcm_16000&commit_strategy=vad&enable_logging={}",
         config.model_id, config.include_timestamps, config.enable_logging
     );
 
@@ -481,5 +480,14 @@ mod tests {
             }
             other => panic!("unexpected event: {other:?}"),
         }
+    }
+
+    #[test]
+    fn build_request_uses_vad_commit_strategy() {
+        let request = build_request(&ScribeRealtimeConfig::default()).expect("request");
+        let uri = request.uri().to_string();
+
+        assert!(uri.contains("commit_strategy=vad"));
+        assert!(!uri.contains("commit_strategy=manual"));
     }
 }
