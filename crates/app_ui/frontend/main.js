@@ -447,6 +447,18 @@ function currentActionSelection() {
   return state.transcriptSelection || state.stickyTranscriptSelection || currentManualQuestionSelection();
 }
 
+function refreshCurrentSelectionTarget() {
+  const selection = snapshotTranscriptSelection();
+  if (!selection) {
+    return null;
+  }
+
+  state.transcriptSelection = selection;
+  state.stickyTranscriptSelection = selection;
+  renderSelectionState();
+  return selection;
+}
+
 function renderSelectionState() {
   const selection = currentActionSelection();
   const promotedSelection = currentManualQuestionSelection();
@@ -681,7 +693,6 @@ function renderTranscriptParagraph(paragraph, manualSelection, questionButtonTit
   const manualAnchorId = manualSelection?.segment_ids?.length
     ? String(manualSelection.segment_ids[manualSelection.segment_ids.length - 1])
     : null;
-  const suppressAutoQuestions = manualIds.size > 0;
   const parts = [];
 
   for (let index = 0; index < paragraph.length; index += 1) {
@@ -698,7 +709,7 @@ function renderTranscriptParagraph(paragraph, manualSelection, questionButtonTit
       continue;
     }
 
-    parts.push(renderStandardTranscriptSegment(segment, questionButtonTitle, suppressAutoQuestions));
+    parts.push(renderStandardTranscriptSegment(segment, questionButtonTitle));
   }
 
   return parts.join(" ");
@@ -724,12 +735,12 @@ function renderManualTranscriptRun(run, manualAnchorId, questionButtonTitle) {
   `;
 }
 
-function renderStandardTranscriptSegment(segment, questionButtonTitle, suppressAutoQuestions = false) {
+function renderStandardTranscriptSegment(segment, questionButtonTitle) {
   const classes = ["transcript-fragment"];
-  if (!suppressAutoQuestions && segment.is_question_candidate) {
+  if (segment.is_question_candidate) {
     classes.push("transcript-question");
   }
-  const questionButton = !suppressAutoQuestions && segment.is_question_candidate
+  const questionButton = segment.is_question_candidate
     ? `<button class="question-inline-button secondary" data-question-segment-id="${segment.id}" title="${questionButtonTitle}">?</button>`
     : "";
 
@@ -1402,14 +1413,10 @@ document.querySelectorAll(".hero-actions [data-action]").forEach((button) => {
   [els.actionCommentButton, "CommentCurrentTopic"],
 ].forEach(([button, defaultAction]) => {
   button.addEventListener("pointerdown", () => {
-    const selection = snapshotTranscriptSelection();
-    if (selection) {
-      state.transcriptSelection = selection;
-      state.stickyTranscriptSelection = selection;
-      renderSelectionState();
-    }
+    refreshCurrentSelectionTarget();
   });
   button.addEventListener("click", async () => {
+    refreshCurrentSelectionTarget();
     const action = resolvePrimaryAction(defaultAction);
     try {
       await runWithButtonFeedback(
