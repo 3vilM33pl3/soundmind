@@ -65,6 +65,8 @@ pub struct AssistantOutput {
     pub content: String,
     pub confidence: Option<f32>,
     pub created_at: DateTime<Utc>,
+    pub reused_from_history: bool,
+    pub source_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -116,6 +118,10 @@ pub struct AssistantEventDto {
     pub content: String,
     pub confidence: f32,
     pub created_at: DateTime<Utc>,
+    pub model_id: Option<String>,
+    pub request_text: Option<String>,
+    pub reused_from_history: bool,
+    pub reused_from_event_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

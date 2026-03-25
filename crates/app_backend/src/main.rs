@@ -127,6 +127,13 @@ struct UploadGate {
     upload_active: bool,
 }
 
+#[derive(Debug, Clone)]
+struct AssistantRequestIdentity {
+    request_kind: String,
+    request_key: String,
+    request_text: String,
+}
+
 impl UploadGate {
     fn new(config: &CaptureSection) -> Self {
         Self {
@@ -798,6 +805,8 @@ async fn maybe_generate_response(
                 content: "No recent transcript is available yet.".to_string(),
                 confidence: Some(1.0),
                 created_at: assistant_timestamp(),
+                reused_from_history: false,
+                source_model: None,
             };
             snapshot.write().await.latest_assistant = Some(notice);
         }
@@ -811,6 +820,8 @@ async fn maybe_generate_response(
                 content: "Cloud processing is paused. Resume cloud processing to generate assistant output.".to_string(),
                 confidence: Some(1.0),
                 created_at: assistant_timestamp(),
+                reused_from_history: false,
+                source_model: None,
             };
             snapshot.write().await.latest_assistant = Some(notice);
             return Ok(false);
@@ -820,12 +831,53 @@ async fn maybe_generate_response(
     }
 
     snapshot.write().await.cloud_state = CloudState::LlmActive;
+    let request_identity = build_request_identity(kind, &window, focus_excerpt.as_deref());
     let assistant_context = build_assistant_context(settings, storage, focus_excerpt).await?;
     let model = {
         let settings = settings.read().await;
         let model = settings.openai_model.trim();
         if model.is_empty() { default_openai_model() } else { model.to_string() }
     };
+
+    if let Some(identity) = &request_identity {
+        if let Some(reused) = storage
+            .find_reusable_assistant_event(&model, &identity.request_kind, &identity.request_key)
+            .await?
+        {
+            let assistant = AssistantOutput {
+                kind: assistant_kind_from_str(kind),
+                content: reused.content.clone(),
+                confidence: Some(reused.confidence),
+                created_at: assistant_timestamp(),
+                reused_from_history: true,
+                source_model: Some(model.clone()),
+            };
+
+            {
+                let mut locked = snapshot.write().await;
+                locked.latest_assistant = Some(assistant);
+                locked.cloud_state = effective_cloud_state(&locked);
+            }
+
+            storage
+                .insert_assistant_event(
+                    session_id,
+                    kind,
+                    &reused.content,
+                    reused.confidence,
+                    &model,
+                    &identity.request_kind,
+                    &identity.request_key,
+                    &identity.request_text,
+                    Some(reused.id),
+                    true,
+                )
+                .await?;
+
+            return Ok(true);
+        }
+    }
+
     let response = openai.respond(&model, mode, &window, &assistant_context).await?;
 
     if !response.should_respond {
@@ -839,6 +891,8 @@ async fn maybe_generate_response(
                 },
                 confidence: Some(response.confidence),
                 created_at: assistant_timestamp(),
+                reused_from_history: false,
+                source_model: Some(model.clone()),
             };
             let mut locked = snapshot.write().await;
             locked.latest_assistant = Some(notice);
@@ -848,15 +902,12 @@ async fn maybe_generate_response(
     }
 
     let assistant = AssistantOutput {
-        kind: match kind {
-            "answer" => AssistantKind::Answer,
-            "summary" => AssistantKind::Summary,
-            "commentary" => AssistantKind::Commentary,
-            _ => AssistantKind::Answer,
-        },
+        kind: assistant_kind_from_str(kind),
         content: response.answer.clone(),
         confidence: Some(response.confidence),
         created_at: assistant_timestamp(),
+        reused_from_history: false,
+        source_model: Some(model.clone()),
     };
 
     {
@@ -865,9 +916,96 @@ async fn maybe_generate_response(
         locked.cloud_state = effective_cloud_state(&locked);
     }
 
-    storage.insert_assistant_event(session_id, kind, &response.answer, response.confidence).await?;
+    if let Some(identity) = &request_identity {
+        storage
+            .insert_assistant_event(
+                session_id,
+                kind,
+                &response.answer,
+                response.confidence,
+                &model,
+                &identity.request_kind,
+                &identity.request_key,
+                &identity.request_text,
+                None,
+                false,
+            )
+            .await?;
+    }
 
     Ok(true)
+}
+
+fn assistant_kind_from_str(kind: &str) -> AssistantKind {
+    match kind {
+        "answer" => AssistantKind::Answer,
+        "summary" => AssistantKind::Summary,
+        "commentary" => AssistantKind::Commentary,
+        _ => AssistantKind::Answer,
+    }
+}
+
+fn build_request_identity(
+    kind: &str,
+    window: &[TranscriptSegment],
+    focus_excerpt: Option<&str>,
+) -> Option<AssistantRequestIdentity> {
+    if window.is_empty() {
+        return None;
+    }
+
+    let request_text = match kind {
+        "answer" => focus_excerpt
+            .map(normalize_display_text)
+            .filter(|text| !text.is_empty())
+            .or_else(|| {
+                window
+                    .iter()
+                    .rev()
+                    .find(|segment| segment.text.contains('?'))
+                    .map(|segment| normalize_display_text(&segment.text))
+            })
+            .unwrap_or_else(|| normalize_display_text(&window[window.len() - 1].text)),
+        "summary" | "commentary" => focus_excerpt
+            .map(normalize_display_text)
+            .filter(|text| !text.is_empty())
+            .unwrap_or_else(|| {
+                normalize_display_text(
+                    &window.iter().map(|segment| segment.text.as_str()).collect::<Vec<_>>().join(" "),
+                )
+            }),
+        _ => normalize_display_text(
+            &window.iter().map(|segment| segment.text.as_str()).collect::<Vec<_>>().join(" "),
+        ),
+    };
+
+    let request_key = normalize_request_key(&request_text);
+    if request_key.is_empty() {
+        return None;
+    }
+
+    Some(AssistantRequestIdentity {
+        request_kind: kind.to_string(),
+        request_key,
+        request_text,
+    })
+}
+
+fn normalize_display_text(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ").trim().to_string()
+}
+
+fn normalize_request_key(text: &str) -> String {
+    normalize_display_text(text)
+        .chars()
+        .map(|ch| match ch {
+            '’' | '‘' => '\'',
+            '“' | '”' => '"',
+            '–' | '—' => '-',
+            _ => ch,
+        })
+        .collect::<String>()
+        .to_lowercase()
 }
 
 async fn maybe_auto_generate_assistant(
@@ -1636,5 +1774,16 @@ mod tests {
         );
 
         assert_eq!(focus.as_deref(), Some("Who are you"));
+    }
+
+    #[test]
+    fn request_identity_normalizes_question_text_for_exact_reuse() {
+        let window = transcript_with_segments(&["How  would you improve this — process?"]).segments().to_vec();
+        let identity = build_request_identity("answer", &window, Some("How would you improve this - process?"))
+            .expect("expected request identity");
+
+        assert_eq!(identity.request_kind, "answer");
+        assert_eq!(identity.request_text, "How would you improve this - process?");
+        assert_eq!(identity.request_key, "how would you improve this - process?");
     }
 }

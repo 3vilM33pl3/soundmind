@@ -313,10 +313,16 @@ function renderAssistantCard(snapshot) {
       </div>
     `
     : "";
+  const cachedBadge = latestAssistant.reused_from_history
+    ? `<span class="reuse-badge">From History</span>`
+    : "";
+  const modelLabel = latestAssistant.source_model
+    ? `<span class="assistant-model">${escapeHtml(latestAssistant.source_model)}</span>`
+    : "";
 
   els.assistantCard.innerHTML = `
     <div class="assistant-meta">
-      ${escapeHtml(latestAssistant.kind)} • ${formatTime(latestAssistant.created_at)}
+      ${escapeHtml(latestAssistant.kind)} • ${formatTime(latestAssistant.created_at)} ${modelLabel} ${cachedBadge}
     </div>
     ${questionMarkup}
     <div class="assistant-content">${renderAssistantContent(latestAssistant.content, latestAssistant.kind)}</div>
@@ -1030,7 +1036,12 @@ function renderSessionDetail() {
         .map(
           (event) => `
             <article class="detail-row">
-              <div class="segment-meta">${escapeHtml(event.kind)} • ${formatTime(event.created_at)}</div>
+              <div class="segment-meta">
+                ${escapeHtml(event.kind)} • ${formatTime(event.created_at)}
+                ${event.model_id ? `<span class="assistant-model">${escapeHtml(event.model_id)}</span>` : ""}
+                ${event.reused_from_history ? `<span class="reuse-badge">From History</span>` : ""}
+              </div>
+              ${event.request_text ? `<div class="segment-meta detail-request">${escapeHtml(event.request_text)}</div>` : ""}
               <div class="segment-text">${escapeHtml(event.content)}</div>
             </article>`,
         )

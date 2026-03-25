@@ -645,6 +645,31 @@ textarea {
   font-size: 1rem;
 }
 
+.reuse-badge,
+.assistant-model {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-left: 0.45rem;
+  padding: 0.18rem 0.48rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.reuse-badge {
+  background: rgba(45, 97, 120, 0.12);
+  color: var(--accent-2);
+  box-shadow: inset 0 0 0 1px rgba(45, 97, 120, 0.18);
+}
+
+.assistant-model {
+  background: rgba(188, 90, 51, 0.08);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px rgba(188, 90, 51, 0.14);
+}
+
 .assistant-content p {
   margin: 0;
 }
@@ -757,6 +782,12 @@ textarea {
 .transcript-fragment {
   color: var(--ink);
   user-select: text;
+}
+
+.detail-request {
+  margin-top: 0.45rem;
+  letter-spacing: 0.04em;
+  text-transform: none;
 }
 
 .transcript-fragment-line {

@@ -26,6 +26,22 @@ pub struct PrimingDocumentRecord {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone)]
+pub struct StoredAssistantEvent {
+    pub id: Uuid,
+    pub session_id: Uuid,
+    pub kind: String,
+    pub content: String,
+    pub confidence: f32,
+    pub created_at: DateTime<Utc>,
+    pub model_id: Option<String>,
+    pub request_kind: Option<String>,
+    pub request_key: Option<String>,
+    pub request_text: Option<String>,
+    pub reused_from_history: bool,
+    pub reused_from_event_id: Option<Uuid>,
+}
+
 impl Storage {
     pub async fn connect(database_url: &str) -> Result<Self> {
         let connect_options = if let Some(path) = database_url.strip_prefix("sqlite://") {
@@ -218,22 +234,81 @@ impl Storage {
         kind: &str,
         content: &str,
         confidence: f32,
-    ) -> Result<()> {
+        model_id: &str,
+        request_kind: &str,
+        request_key: &str,
+        request_text: &str,
+        reused_from_event_id: Option<Uuid>,
+        reused_from_history: bool,
+    ) -> Result<StoredAssistantEvent> {
+        let id = Uuid::new_v4();
+        let created_at = Utc::now();
         sqlx::query(
             r#"
-            INSERT INTO assistant_events (id, session_id, kind, input_window_ref, content, confidence, created_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, CURRENT_TIMESTAMP)
+            INSERT INTO assistant_events (
+              id, session_id, kind, input_window_ref, content, confidence, created_at,
+              model_id, request_kind, request_key, request_text, reused_from_event_id, reused_from_history
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
             "#,
         )
-        .bind(Uuid::new_v4().to_string())
+        .bind(id.to_string())
         .bind(session_id.to_string())
         .bind(kind)
         .bind("recent_window")
         .bind(content)
         .bind(confidence)
+        .bind(created_at.to_rfc3339())
+        .bind(model_id)
+        .bind(request_kind)
+        .bind(request_key)
+        .bind(request_text)
+        .bind(reused_from_event_id.map(|value| value.to_string()))
+        .bind(if reused_from_history { 1 } else { 0 })
         .execute(&self.pool)
         .await?;
-        Ok(())
+        Ok(StoredAssistantEvent {
+            id,
+            session_id,
+            kind: kind.to_string(),
+            content: content.to_string(),
+            confidence,
+            created_at,
+            model_id: Some(model_id.to_string()),
+            request_kind: Some(request_kind.to_string()),
+            request_key: Some(request_key.to_string()),
+            request_text: Some(request_text.to_string()),
+            reused_from_history,
+            reused_from_event_id,
+        })
+    }
+
+    pub async fn find_reusable_assistant_event(
+        &self,
+        model_id: &str,
+        request_kind: &str,
+        request_key: &str,
+    ) -> Result<Option<StoredAssistantEvent>> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+              id, session_id, kind, content, confidence, created_at, model_id,
+              request_kind, request_key, request_text, reused_from_history, reused_from_event_id
+            FROM assistant_events
+            WHERE model_id = ?1
+              AND request_kind = ?2
+              AND request_key = ?3
+            ORDER BY created_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(model_id)
+        .bind(request_kind)
+        .bind(request_key)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(row_to_stored_assistant_event).transpose()
     }
 
     pub async fn list_sessions(&self, limit: usize) -> Result<Vec<SessionSummaryDto>> {
@@ -320,7 +395,9 @@ impl Storage {
 
         let assistant_events = sqlx::query(
             r#"
-            SELECT id, session_id, kind, content, confidence, created_at
+            SELECT
+              id, session_id, kind, content, confidence, created_at,
+              model_id, request_text, reused_from_history, reused_from_event_id
             FROM assistant_events
             WHERE session_id = ?1
             ORDER BY created_at ASC
@@ -461,6 +538,33 @@ fn row_to_assistant_event(row: sqlx::sqlite::SqliteRow) -> Result<AssistantEvent
         content: row.try_get("content")?,
         confidence: row.try_get::<f64, _>("confidence")? as f32,
         created_at: parse_sqlite_datetime(&row.try_get::<String, _>("created_at")?)?,
+        model_id: row.try_get("model_id")?,
+        request_text: row.try_get("request_text")?,
+        reused_from_history: row.try_get::<i64, _>("reused_from_history").unwrap_or(0) != 0,
+        reused_from_event_id: row
+            .try_get::<Option<String>, _>("reused_from_event_id")?
+            .map(|value| Uuid::parse_str(&value))
+            .transpose()?,
+    })
+}
+
+fn row_to_stored_assistant_event(row: sqlx::sqlite::SqliteRow) -> Result<StoredAssistantEvent> {
+    Ok(StoredAssistantEvent {
+        id: Uuid::parse_str(&row.try_get::<String, _>("id")?)?,
+        session_id: Uuid::parse_str(&row.try_get::<String, _>("session_id")?)?,
+        kind: row.try_get("kind")?,
+        content: row.try_get("content")?,
+        confidence: row.try_get::<f64, _>("confidence")? as f32,
+        created_at: parse_sqlite_datetime(&row.try_get::<String, _>("created_at")?)?,
+        model_id: row.try_get("model_id")?,
+        request_kind: row.try_get("request_kind")?,
+        request_key: row.try_get("request_key")?,
+        request_text: row.try_get("request_text")?,
+        reused_from_history: row.try_get::<i64, _>("reused_from_history").unwrap_or(0) != 0,
+        reused_from_event_id: row
+            .try_get::<Option<String>, _>("reused_from_event_id")?
+            .map(|value| Uuid::parse_str(&value))
+            .transpose()?,
     })
 }
 
@@ -503,4 +607,79 @@ fn parse_sqlite_datetime(value: &str) -> Result<DateTime<Utc>> {
                 .map(|naive| DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc))
         })
         .with_context(|| format!("failed to parse datetime {value}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn finds_reusable_assistant_event_by_model_kind_and_key() -> Result<()> {
+        let database_path =
+            std::env::temp_dir().join(format!("soundmind-storage-test-{}.db", Uuid::new_v4()));
+        let database_url = format!("sqlite://{}", database_path.display());
+        let storage = Storage::connect(&database_url).await?;
+        let session_id = Uuid::new_v4();
+
+        storage
+            .insert_assistant_event(
+                session_id,
+                "answer",
+                "Old answer",
+                0.4,
+                "gpt-4o-mini",
+                "answer",
+                "question one?",
+                "Question one?",
+                None,
+                false,
+            )
+            .await?;
+
+        let reused = storage
+            .insert_assistant_event(
+                session_id,
+                "answer",
+                "New answer",
+                0.9,
+                "gpt-4o-mini",
+                "answer",
+                "question one?",
+                "Question one?",
+                None,
+                false,
+            )
+            .await?;
+
+        storage
+            .insert_assistant_event(
+                session_id,
+                "answer",
+                "Different model answer",
+                0.8,
+                "gpt-5.4",
+                "answer",
+                "question one?",
+                "Question one?",
+                None,
+                false,
+            )
+            .await?;
+
+        let found = storage
+            .find_reusable_assistant_event("gpt-4o-mini", "answer", "question one?")
+            .await?
+            .expect("expected reusable answer");
+
+        assert_eq!(found.id, reused.id);
+        assert_eq!(found.content, "New answer");
+
+        let missing = storage
+            .find_reusable_assistant_event("gpt-5.4-mini", "answer", "question one?")
+            .await?;
+        assert!(missing.is_none());
+
+        let _ = std::fs::remove_file(database_path);
+        Ok(())
+    }
 }
