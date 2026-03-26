@@ -13,6 +13,8 @@ use app_core::CaptureSection;
 use audio_pipeline::AudioChunk;
 #[cfg(test)]
 use ipc_schema::BackendStatusSnapshot;
+use ipc_schema::{LlmModelDescriptorDto, LlmModelLocalityDto};
+use llm_core::{ModelCapability, ModelDescriptor, ModelLocality};
 use storage_sqlite::Storage;
 use tokio::sync::mpsc;
 use tower_http::cors::CorsLayer;
@@ -22,7 +24,7 @@ use tracing::{error, info};
 use crate::assistant::{
     build_request_identity, selection_focus_excerpt, transcript_window_for_segment_ids,
 };
-use crate::runtime::run_runtime;
+use crate::runtime::{build_llm_registry, run_runtime};
 #[cfg(test)]
 use crate::runtime::{UploadGate, effective_stt_status};
 #[cfg(test)]
@@ -44,9 +46,13 @@ async fn main() -> Result<()> {
     let config = load_config()?;
     let database_url = sqlite_url(&config.storage.database_path);
     let storage = Arc::new(Storage::connect(&database_url).await?);
+    let llm_registry = build_llm_registry(&config);
+    let llm_models = llm_registry.models().into_iter().map(to_llm_model_dto).collect();
 
     let (action_tx, action_rx) = mpsc::channel(64);
-    let app_state = AppCoreState::initialize(&config, Arc::clone(&storage), action_tx.clone()).await?;
+    let app_state =
+        AppCoreState::initialize(&config, Arc::clone(&storage), action_tx.clone(), llm_models)
+            .await?;
 
     let config_for_runtime = config.clone();
     let runtime_snapshot = app_state.snapshot_handle();
@@ -58,6 +64,7 @@ async fn main() -> Result<()> {
             runtime_snapshot,
             runtime_storage,
             runtime_settings,
+            llm_registry,
             action_rx,
         )
         .await
@@ -79,6 +86,27 @@ async fn main() -> Result<()> {
 
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
+}
+
+fn to_llm_model_dto(model: ModelDescriptor) -> LlmModelDescriptorDto {
+    LlmModelDescriptorDto {
+        provider_id: model.provider_id,
+        model_id: model.model_id,
+        locality: match model.locality {
+            ModelLocality::Remote => LlmModelLocalityDto::Remote,
+            ModelLocality::Local => LlmModelLocalityDto::Local,
+        },
+        capabilities: model
+            .capabilities
+            .into_iter()
+            .map(|capability| match capability {
+                ModelCapability::StructuredOutput => "structured_output",
+                ModelCapability::TranscriptReasoning => "transcript_reasoning",
+                ModelCapability::PrimingDocuments => "priming_documents",
+            })
+            .map(str::to_string)
+            .collect(),
+    }
 }
 
 #[cfg(test)]

@@ -76,7 +76,8 @@ pub struct AppSettingsDto {
     pub transcript_storage_enabled: bool,
     pub auto_start_cloud: bool,
     pub default_mode: AppMode,
-    pub openai_model: String,
+    pub llm_provider: String,
+    pub llm_model: String,
     pub assistant_instruction: String,
 }
 
@@ -87,7 +88,8 @@ impl Default for AppSettingsDto {
             transcript_storage_enabled: true,
             auto_start_cloud: false,
             default_mode: AppMode::ManualQa,
-            openai_model: "gpt-4o-mini".to_string(),
+            llm_provider: default_llm_provider(),
+            llm_model: default_llm_model(),
             assistant_instruction: default_assistant_instruction(),
         }
     }
@@ -97,8 +99,26 @@ pub fn default_assistant_instruction() -> String {
     "You are assisting the user during a live job interview. Use the live transcript plus any uploaded priming documents such as the user's CV, the job description, company notes, or project history. Summarize what the interviewer is asking, suggest concise high-quality answers tailored to the user's background, point out likely follow-up questions, and avoid inventing experience or qualifications that are not supported by the transcript or uploaded documents. Prefer short bullet points when they improve speed of reading. Keep advice compact, practical, and easy to scan while the user is speaking with an interviewer.".to_string()
 }
 
-pub fn default_openai_model() -> String {
+pub fn default_llm_provider() -> String {
+    "openai".to_string()
+}
+
+pub fn default_llm_model() -> String {
     "gpt-4o-mini".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum LlmModelLocalityDto {
+    Remote,
+    Local,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LlmModelDescriptorDto {
+    pub provider_id: String,
+    pub model_id: String,
+    pub locality: LlmModelLocalityDto,
+    pub capabilities: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

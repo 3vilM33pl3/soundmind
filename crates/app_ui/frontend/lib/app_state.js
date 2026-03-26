@@ -6,6 +6,7 @@ export function createState() {
   return {
     snapshot: null,
     settings: null,
+    availableLlmModels: [],
     transcriptSelection: null,
     stickyTranscriptSelection: null,
     primingDocuments: [],
@@ -114,4 +115,3 @@ export function clearManualQuestionSelection(state) {
   state.manualQuestionSelectionSessionId = null;
   state.lastManualQuestionSelectionKey = null;
 }
-

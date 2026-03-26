@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use ipc_schema::{AppSettingsDto, BackendStatusSnapshot, CaptureState, CloudState, UserAction};
+use llm_core::LlmProviderRegistry;
+use llm_ollama::{OllamaConfig, OllamaReasoner};
 use llm_openai::{OpenAiConfig, OpenAiReasoner};
 use policy_engine::PolicyState;
 use storage_sqlite::Storage;
@@ -91,14 +93,11 @@ pub(crate) async fn run_runtime(
     snapshot: Arc<RwLock<BackendStatusSnapshot>>,
     storage: Arc<Storage>,
     settings: Arc<RwLock<AppSettingsDto>>,
+    llm_registry: LlmProviderRegistry,
     mut action_rx: mpsc::Receiver<UserAction>,
 ) -> Result<()> {
     let session_id = Uuid::new_v4();
     let runtime_settings = settings.read().await.clone();
-    let openai = OpenAiReasoner::new(OpenAiConfig {
-        api_key: std::env::var("OPENAI_API_KEY").ok(),
-        enabled: config.providers.openai.enabled,
-    });
 
     let mut policy = PolicyState {
         mode: runtime_settings.default_mode,
@@ -168,7 +167,7 @@ pub(crate) async fn run_runtime(
                     &snapshot,
                     &storage,
                     &settings,
-                    &openai,
+                    &llm_registry,
                     &mut transcript,
                     &mut policy,
                     &mut upload_gate,
@@ -239,7 +238,7 @@ pub(crate) async fn run_runtime(
                                         &snapshot,
                                         &storage,
                                         &settings,
-                                        &openai,
+                                        &llm_registry,
                                         &mut transcript,
                                         &mut policy,
                                     )
@@ -269,6 +268,23 @@ pub(crate) async fn run_runtime(
     storage.end_session(session_id).await?;
     storage.append_audit_event(Some(session_id), "session_stopped").await?;
     Ok(())
+}
+
+pub(crate) fn build_llm_registry(config: &RootConfig) -> LlmProviderRegistry {
+    let openai = Arc::new(OpenAiReasoner::new(OpenAiConfig {
+        api_key: std::env::var("OPENAI_API_KEY").ok(),
+        enabled: config.providers.openai.enabled,
+    }));
+    let ollama = Arc::new(OllamaReasoner::new(OllamaConfig {
+        base_url: config.providers.ollama.base_url.clone(),
+        enabled: config.providers.ollama.enabled,
+        default_model: config.providers.ollama.model.clone(),
+    }));
+
+    let mut providers: Vec<Arc<dyn llm_core::LlmProvider + Send + Sync>> = Vec::new();
+    providers.push(openai);
+    providers.push(ollama);
+    LlmProviderRegistry::new(providers)
 }
 
 async fn drain_transcriber_events(

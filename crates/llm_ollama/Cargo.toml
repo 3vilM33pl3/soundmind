@@ -1,0 +1,16 @@
+[package]
+name = "llm_ollama"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+llm_core = { path = "../llm_core" }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+transcript_core = { path = "../transcript_core" }
+

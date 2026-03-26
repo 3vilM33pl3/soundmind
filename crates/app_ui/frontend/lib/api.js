@@ -15,6 +15,7 @@ export function createApi(backendUrl) {
     backendUrl,
     fetchHealth: () => fetchJson("/health"),
     fetchSettings: () => fetchJson("/settings"),
+    fetchLlmModels: () => fetchJson("/llm/models"),
     fetchSessions: () => fetchJson("/sessions"),
     fetchPrimingDocuments: () => fetchJson("/priming-documents"),
     fetchSessionDetail: (sessionId) => fetchJson(`/sessions/${sessionId}`),
@@ -49,4 +50,3 @@ export function createApi(backendUrl) {
     },
   };
 }
-

@@ -6,10 +6,10 @@ use chrono::Utc;
 use context_engine::last_question_candidate;
 use ipc_schema::{
     AppSettingsDto, AssistantKind, AssistantOutput, BackendStatusSnapshot, CloudState,
-    TranscriptSegmentDto, TranscriptSelectionPayload, TranscriptSnapshot, default_assistant_instruction,
-    default_openai_model,
+    TranscriptSegmentDto, TranscriptSelectionPayload, TranscriptSnapshot,
+    default_assistant_instruction, default_llm_model, default_llm_provider,
 };
-use llm_core::{AssistantContextInput, LlmProvider, PrimingDocumentInput, ResponseMode};
+use llm_core::{AssistantContextInput, LlmProviderRegistry, PrimingDocumentInput, ResponseMode};
 use llm_openai::assistant_timestamp;
 use policy_engine::PolicyState;
 use storage_sqlite::Storage;
@@ -39,7 +39,7 @@ pub(crate) async fn handle_action(
     snapshot: &Arc<RwLock<BackendStatusSnapshot>>,
     storage: &Storage,
     settings: &Arc<RwLock<AppSettingsDto>>,
-    llm_provider: &(dyn LlmProvider + Send + Sync),
+    llm_registry: &LlmProviderRegistry,
     transcript: &mut TranscriptState,
     policy: &mut PolicyState,
     upload_gate: &mut UploadGate,
@@ -90,7 +90,7 @@ pub(crate) async fn handle_action(
                 snapshot,
                 storage,
                 settings,
-                llm_provider,
+                llm_registry,
                 policy,
                 true,
             )
@@ -110,7 +110,7 @@ pub(crate) async fn handle_action(
                 snapshot,
                 storage,
                 settings,
-                llm_provider,
+                llm_registry,
                 policy,
                 true,
             )
@@ -134,7 +134,7 @@ pub(crate) async fn handle_action(
                 snapshot,
                 storage,
                 settings,
-                llm_provider,
+                llm_registry,
                 policy,
                 true,
             )
@@ -154,7 +154,7 @@ pub(crate) async fn handle_action(
                 snapshot,
                 storage,
                 settings,
-                llm_provider,
+                llm_registry,
                 policy,
                 true,
             )
@@ -178,7 +178,7 @@ pub(crate) async fn handle_action(
                 snapshot,
                 storage,
                 settings,
-                llm_provider,
+                llm_registry,
                 policy,
                 true,
             )
@@ -198,7 +198,7 @@ pub(crate) async fn handle_action(
                 snapshot,
                 storage,
                 settings,
-                llm_provider,
+                llm_registry,
                 policy,
                 true,
             )
@@ -222,7 +222,7 @@ pub(crate) async fn handle_action(
                 snapshot,
                 storage,
                 settings,
-                llm_provider,
+                llm_registry,
                 policy,
                 true,
             )
@@ -253,7 +253,7 @@ pub(crate) async fn maybe_auto_generate_assistant(
     snapshot: &Arc<RwLock<BackendStatusSnapshot>>,
     storage: &Storage,
     settings: &Arc<RwLock<AppSettingsDto>>,
-    llm_provider: &(dyn LlmProvider + Send + Sync),
+    llm_registry: &LlmProviderRegistry,
     transcript: &mut TranscriptState,
     policy: &mut PolicyState,
 ) -> Result<()> {
@@ -272,7 +272,7 @@ pub(crate) async fn maybe_auto_generate_assistant(
             snapshot,
             storage,
             settings,
-            llm_provider,
+            llm_registry,
             policy,
             false,
         )
@@ -370,7 +370,7 @@ async fn maybe_generate_response(
     snapshot: &Arc<RwLock<BackendStatusSnapshot>>,
     storage: &Storage,
     settings: &Arc<RwLock<AppSettingsDto>>,
-    llm_provider: &(dyn LlmProvider + Send + Sync),
+    llm_registry: &LlmProviderRegistry,
     policy: &mut PolicyState,
     manual_trigger: bool,
 ) -> Result<bool> {
@@ -413,15 +413,37 @@ async fn maybe_generate_response(
     snapshot.write().await.cloud_state = CloudState::LlmActive;
     let request_identity = build_request_identity(kind, &window, focus_excerpt.as_deref());
     let assistant_context = build_assistant_context(settings, storage, focus_excerpt).await?;
-    let model = {
+    let (provider_id, model) = {
         let settings = settings.read().await;
-        let model = settings.openai_model.trim();
-        if model.is_empty() { default_openai_model() } else { model.to_string() }
+        let provider_id = settings.llm_provider.trim();
+        let model = settings.llm_model.trim();
+        (
+            if provider_id.is_empty() { default_llm_provider() } else { provider_id.to_string() },
+            if model.is_empty() { default_llm_model() } else { model.to_string() },
+        )
+    };
+    let storage_model_id = format!("{provider_id}:{model}");
+    let Some(llm_provider) = llm_registry.provider(&provider_id) else {
+        let notice = AssistantOutput {
+            kind: AssistantKind::Notice,
+            question_text,
+            content: format!("The configured provider `{provider_id}` is not available."),
+            confidence: Some(1.0),
+            created_at: assistant_timestamp(),
+            reused_from_history: false,
+            source_model: Some(storage_model_id.clone()),
+        };
+        set_assistant_output(snapshot, surface, Some(notice)).await;
+        return Ok(false);
     };
 
     if let Some(identity) = &request_identity {
         if let Some(reused) = storage
-            .find_reusable_assistant_event(&model, &identity.request_kind, &identity.request_key)
+            .find_reusable_assistant_event(
+                &storage_model_id,
+                &identity.request_kind,
+                &identity.request_key,
+            )
             .await?
         {
             let assistant = AssistantOutput {
@@ -431,7 +453,7 @@ async fn maybe_generate_response(
                 confidence: Some(reused.confidence),
                 created_at: assistant_timestamp(),
                 reused_from_history: true,
-                source_model: Some(model.clone()),
+                source_model: Some(storage_model_id.clone()),
             };
 
             {
@@ -446,7 +468,7 @@ async fn maybe_generate_response(
                     assistant_event_kind(kind, surface),
                     &reused.content,
                     reused.confidence,
-                    &model,
+                    &storage_model_id,
                     &identity.request_kind,
                     &identity.request_key,
                     &identity.request_text,
@@ -474,7 +496,7 @@ async fn maybe_generate_response(
                 confidence: Some(response.confidence),
                 created_at: assistant_timestamp(),
                 reused_from_history: false,
-                source_model: Some(model.clone()),
+                source_model: Some(storage_model_id.clone()),
             };
             let mut locked = snapshot.write().await;
             set_assistant_output_locked(&mut locked, surface, Some(notice));
@@ -490,7 +512,7 @@ async fn maybe_generate_response(
         confidence: Some(response.confidence),
         created_at: assistant_timestamp(),
         reused_from_history: false,
-        source_model: Some(model.clone()),
+        source_model: Some(storage_model_id.clone()),
     };
 
     {
@@ -506,7 +528,7 @@ async fn maybe_generate_response(
                 assistant_event_kind(kind, surface),
                 &response.answer,
                 response.confidence,
-                &model,
+                &storage_model_id,
                 &identity.request_kind,
                 &identity.request_key,
                 &identity.request_text,

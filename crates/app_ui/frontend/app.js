@@ -11,7 +11,13 @@ import {
 import { createElements } from "./lib/dom.js";
 import { renderDisconnected, runWithButtonFeedback, applyTheme } from "./lib/ui.js";
 import { arrayBufferToBase64, preferredTheme } from "./lib/utils.js";
-import { renderSettings, renderPrimingDocuments, buildSettingsPayload } from "./components/settings.js";
+import {
+  renderSettings,
+  renderPrimingDocuments,
+  buildSettingsPayload,
+  renderLlmModelOptions,
+  renderLlmModelsForProvider,
+} from "./components/settings.js";
 import { renderSessions, renderSessionDetail } from "./components/history.js";
 import {
   clearTranscriptSelection,
@@ -80,11 +86,18 @@ const app = {
       return;
     }
 
-    const settings = await api.fetchSettings();
+    const [settings, models] = await Promise.all([api.fetchSettings(), api.fetchLlmModels()]);
     state.lastSettingsRefreshAt = now;
+    if (
+      !state.availableLlmModels.length ||
+      JSON.stringify(state.availableLlmModels) !== JSON.stringify(models)
+    ) {
+      renderLlmModelOptions(state, els, models);
+    }
     if (!state.settings || JSON.stringify(state.settings) !== JSON.stringify(settings)) {
       renderSettings(state, els, settings);
     }
+    renderLlmModelsForProvider(state, els, settings.llm_provider, settings.llm_model);
   },
   async refreshPrimingDocuments(force = false) {
     const now = Date.now();
@@ -186,12 +199,20 @@ async function handleSettingsSave() {
     if (!previousSettings || previousSettings.auto_start_cloud !== saved.auto_start_cloud) {
       await api.sendAction(saved.auto_start_cloud ? "ResumeCloud" : "PauseCloud");
     }
-    if (!previousSettings || previousSettings.openai_model !== saved.openai_model) {
-      els.settingsNote.textContent = `OpenAI model switched to ${saved.openai_model}.`;
+    if (
+      !previousSettings ||
+      previousSettings.llm_provider !== saved.llm_provider ||
+      previousSettings.llm_model !== saved.llm_model
+    ) {
+      els.settingsNote.textContent = `LLM switched to ${saved.llm_provider}:${saved.llm_model}.`;
     }
     const snapshot = await api.fetchHealth();
     app.renderSnapshot(snapshot);
-    if (!previousSettings || previousSettings.openai_model === saved.openai_model) {
+    if (
+      previousSettings &&
+      previousSettings.llm_provider === saved.llm_provider &&
+      previousSettings.llm_model === saved.llm_model
+    ) {
       els.settingsNote.textContent = "Settings saved and applied.";
     }
   } catch (error) {
@@ -352,7 +373,16 @@ function bindEventHandlers() {
     }
   });
 
-  els.openaiModel.addEventListener("change", async () => {
+  els.llmProvider.addEventListener("change", async () => {
+    renderLlmModelsForProvider(state, els, els.llmProvider.value, null);
+    try {
+      await handleSettingsSave();
+    } catch (error) {
+      app.renderDisconnected(error);
+    }
+  });
+
+  els.llmModel.addEventListener("change", async () => {
     try {
       await handleSettingsSave();
     } catch (error) {
@@ -416,4 +446,3 @@ async function refreshLoop() {
 els.privacyBackend.textContent = backendUrl;
 bindEventHandlers();
 refreshLoop();
-

@@ -7,8 +7,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use ipc_schema::{
-    AppSettingsDto, BackendStatusSnapshot, PrimingDocumentDto, SessionDetailDto, SessionSummaryDto,
-    UserAction,
+    AppSettingsDto, BackendStatusSnapshot, LlmModelDescriptorDto, PrimingDocumentDto,
+    SessionDetailDto, SessionSummaryDto, UserAction,
 };
 use tracing::warn;
 use uuid::Uuid;
@@ -16,6 +16,7 @@ use uuid::Uuid;
 pub(crate) fn router(state: AppCoreState) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/llm/models", get(get_llm_models))
         .route("/actions", post(post_action))
         .route("/settings", get(get_settings).put(put_settings))
         .route("/priming-documents", get(get_priming_documents).post(post_priming_document))
@@ -41,6 +42,10 @@ async fn post_action(
 
 async fn get_settings(State(state): State<AppCoreState>) -> Json<AppSettingsDto> {
     Json(state.get_settings().await)
+}
+
+async fn get_llm_models(State(state): State<AppCoreState>) -> Json<Vec<LlmModelDescriptorDto>> {
+    Json(state.llm_models())
 }
 
 async fn get_priming_documents(

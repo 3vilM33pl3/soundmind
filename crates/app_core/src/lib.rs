@@ -7,8 +7,9 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use dotenvy::from_filename_override;
 use ipc_schema::{
     AppMode, AppSettingsDto, BackendStatusSnapshot, CaptureState, CloudState, PrimingDocumentDto,
-    SessionDetailDto, SessionSummaryDto, UserAction, default_assistant_instruction,
-    default_openai_model,
+    SessionDetailDto, SessionSummaryDto, UserAction, LlmModelDescriptorDto,
+    default_assistant_instruction,
+    default_llm_model, default_llm_provider,
 };
 use serde::{Deserialize, Serialize};
 use storage_sqlite::Storage;
@@ -60,12 +61,34 @@ pub struct StorageSection {
 pub struct ProviderSection {
     pub openai: ProviderConfig,
     pub elevenlabs: ProviderConfig,
+    #[serde(default)]
+    pub ollama: LocalProviderConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProviderConfig {
     pub enabled: bool,
     pub model: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LocalProviderConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_ollama_model")]
+    pub model: String,
+    #[serde(default = "default_ollama_base_url")]
+    pub base_url: String,
+}
+
+impl Default for LocalProviderConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: default_ollama_model(),
+            base_url: default_ollama_base_url(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -97,6 +120,7 @@ pub struct AppCoreState {
     action_tx: mpsc::Sender<UserAction>,
     storage: Arc<Storage>,
     settings: Arc<RwLock<AppSettingsDto>>,
+    llm_models: Arc<Vec<LlmModelDescriptorDto>>,
 }
 
 impl AppCoreState {
@@ -104,6 +128,7 @@ impl AppCoreState {
         config: &RootConfig,
         storage: Arc<Storage>,
         action_tx: mpsc::Sender<UserAction>,
+        llm_models: Vec<LlmModelDescriptorDto>,
     ) -> Result<Self> {
         let settings = Arc::new(RwLock::new(load_or_initialize_settings(&storage, config).await?));
         let initial_settings = settings.read().await.clone();
@@ -120,7 +145,7 @@ impl AppCoreState {
             ..BackendStatusSnapshot::default()
         }));
 
-        Ok(Self { snapshot, action_tx, storage, settings })
+        Ok(Self { snapshot, action_tx, storage, settings, llm_models: Arc::new(llm_models) })
     }
 
     pub fn snapshot_handle(&self) -> Arc<RwLock<BackendStatusSnapshot>> {
@@ -133,6 +158,10 @@ impl AppCoreState {
 
     pub fn storage_handle(&self) -> Arc<Storage> {
         Arc::clone(&self.storage)
+    }
+
+    pub fn llm_models(&self) -> Vec<LlmModelDescriptorDto> {
+        self.llm_models.as_ref().clone()
     }
 
     pub async fn snapshot(&self) -> BackendStatusSnapshot {
@@ -153,8 +182,11 @@ impl AppCoreState {
         if settings.assistant_instruction.trim().is_empty() {
             settings.assistant_instruction = default_assistant_instruction();
         }
-        if settings.openai_model.trim().is_empty() {
-            settings.openai_model = default_openai_model();
+        if settings.llm_provider.trim().is_empty() {
+            settings.llm_provider = default_llm_provider();
+        }
+        if settings.llm_model.trim().is_empty() {
+            settings.llm_model = default_llm_model();
         }
         self.storage.save_settings(&settings).await?;
         *self.settings.write().await = settings.clone();
@@ -323,6 +355,14 @@ fn default_idle_timeout_ms() -> u64 {
     5_000
 }
 
+fn default_ollama_model() -> String {
+    "llama3.2:3b-instruct-q4_K_M".to_string()
+}
+
+fn default_ollama_base_url() -> String {
+    "http://127.0.0.1:11434".to_string()
+}
+
 async fn load_or_initialize_settings(
     storage: &Storage,
     config: &RootConfig,
@@ -336,11 +376,32 @@ async fn load_or_initialize_settings(
         transcript_storage_enabled: true,
         auto_start_cloud: config.app.auto_start_cloud,
         default_mode: config.app.mode,
-        openai_model: default_openai_model(),
+        llm_provider: default_llm_provider_for_config(config),
+        llm_model: default_llm_model_for_config(config),
         assistant_instruction: default_assistant_instruction(),
     };
     storage.save_settings(&settings).await?;
     Ok(settings)
+}
+
+fn default_llm_provider_for_config(config: &RootConfig) -> String {
+    if config.providers.openai.enabled {
+        "openai".to_string()
+    } else if config.providers.ollama.enabled {
+        "ollama".to_string()
+    } else {
+        default_llm_provider()
+    }
+}
+
+fn default_llm_model_for_config(config: &RootConfig) -> String {
+    if config.providers.openai.enabled && !config.providers.openai.model.trim().is_empty() {
+        config.providers.openai.model.clone()
+    } else if config.providers.ollama.enabled && !config.providers.ollama.model.trim().is_empty() {
+        config.providers.ollama.model.clone()
+    } else {
+        default_llm_model()
+    }
 }
 
 async fn extract_document_text(file_name: &str, mime_type: &str, bytes: &[u8]) -> Result<String> {

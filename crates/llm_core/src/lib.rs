@@ -1,6 +1,8 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
 use transcript_core::TranscriptSegment;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -63,4 +65,44 @@ pub trait LlmProvider: Send + Sync {
         transcript: &[TranscriptSegment],
         context: &AssistantContextInput,
     ) -> Result<LlmResponse>;
+}
+
+#[derive(Clone, Default)]
+pub struct LlmProviderRegistry {
+    providers: HashMap<String, Arc<dyn LlmProvider + Send + Sync>>,
+}
+
+impl LlmProviderRegistry {
+    pub fn new(providers: Vec<Arc<dyn LlmProvider + Send + Sync>>) -> Self {
+        let providers = providers
+            .into_iter()
+            .map(|provider| (provider.provider_id().to_string(), provider))
+            .collect();
+        Self { providers }
+    }
+
+    pub fn provider(&self, provider_id: &str) -> Option<Arc<dyn LlmProvider + Send + Sync>> {
+        self.providers.get(provider_id).cloned()
+    }
+
+    pub fn models(&self) -> Vec<ModelDescriptor> {
+        let mut models = self
+            .providers
+            .values()
+            .flat_map(|provider| provider.models())
+            .collect::<Vec<_>>();
+        models.sort_by(|left, right| {
+            left.provider_id
+                .cmp(&right.provider_id)
+                .then_with(|| left.model_id.cmp(&right.model_id))
+        });
+        models
+    }
+
+    pub fn default_selection(&self) -> Option<(String, String)> {
+        self.models()
+            .into_iter()
+            .next()
+            .map(|descriptor| (descriptor.provider_id, descriptor.model_id))
+    }
 }

@@ -23,6 +23,11 @@ retention_days = 0
 enabled = true
 model = "gpt-4o-mini"
 
+[providers.ollama]
+enabled = false
+model = "llama3.2:3b-instruct-q4_K_M"
+base_url = "http://127.0.0.1:11434"
+
 [providers.elevenlabs]
 enabled = true
 model = "scribe_v2_realtime"

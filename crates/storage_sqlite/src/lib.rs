@@ -79,9 +79,13 @@ impl Storage {
                     settings.default_mode =
                         serde_json::from_str(&value).unwrap_or(settings.default_mode)
                 }
-                "openai_model" => {
-                    settings.openai_model =
-                        if value.trim().is_empty() { settings.openai_model.clone() } else { value }
+                "llm_provider" => {
+                    settings.llm_provider =
+                        if value.trim().is_empty() { settings.llm_provider.clone() } else { value }
+                }
+                "llm_model" | "openai_model" => {
+                    settings.llm_model =
+                        if value.trim().is_empty() { settings.llm_model.clone() } else { value }
                 }
                 "assistant_instruction" => {
                     settings.assistant_instruction = if value.trim().is_empty() {
@@ -106,7 +110,8 @@ impl Storage {
         .await?;
         self.upsert_setting("auto_start_cloud", settings.auto_start_cloud.to_string()).await?;
         self.upsert_setting("default_mode", serde_json::to_string(&settings.default_mode)?).await?;
-        self.upsert_setting("openai_model", settings.openai_model.clone()).await?;
+        self.upsert_setting("llm_provider", settings.llm_provider.clone()).await?;
+        self.upsert_setting("llm_model", settings.llm_model.clone()).await?;
         self.upsert_setting("assistant_instruction", settings.assistant_instruction.clone())
             .await?;
         Ok(())

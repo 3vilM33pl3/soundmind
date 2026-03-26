@@ -24,7 +24,8 @@ export function createElements() {
     themeToggle: document.querySelector("#theme-toggle"),
     errorList: document.querySelector("#error-list"),
     settingsMode: document.querySelector("#settings-mode"),
-    openaiModel: document.querySelector("#openai-model"),
+    llmProvider: document.querySelector("#llm-provider"),
+    llmModel: document.querySelector("#llm-model"),
     retentionDays: document.querySelector("#retention-days"),
     transcriptStorage: document.querySelector("#transcript-storage"),
     autoStartCloud: document.querySelector("#auto-start-cloud"),
@@ -52,4 +53,3 @@ export function createElements() {
     sessionDetail: document.querySelector("#session-detail"),
   };
 }
-

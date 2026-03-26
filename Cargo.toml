@@ -8,6 +8,7 @@ members = [
   "crates/context_engine",
   "crates/ipc_schema",
   "crates/llm_core",
+  "crates/llm_ollama",
   "crates/llm_openai",
   "crates/policy_engine",
   "crates/storage_sqlite",

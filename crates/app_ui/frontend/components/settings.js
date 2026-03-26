@@ -6,7 +6,8 @@ import { runWithButtonFeedback } from "../lib/ui.js";
 export function renderSettings(state, els, settings) {
   state.settings = settings;
   els.settingsMode.value = settings.default_mode;
-  els.openaiModel.value = settings.openai_model || "gpt-4o-mini";
+  els.llmProvider.value = settings.llm_provider || "openai";
+  els.llmModel.value = settings.llm_model || "gpt-4o-mini";
   els.retentionDays.value = String(settings.retention_days);
   els.transcriptStorage.checked = settings.transcript_storage_enabled;
   els.autoStartCloud.checked = settings.auto_start_cloud;
@@ -26,9 +27,45 @@ export function buildSettingsPayload(els) {
     transcript_storage_enabled: els.transcriptStorage.checked,
     auto_start_cloud: els.autoStartCloud.checked,
     default_mode: els.settingsMode.value,
-    openai_model: els.openaiModel.value.trim() || "gpt-4o-mini",
+    llm_provider: els.llmProvider.value.trim() || "openai",
+    llm_model: els.llmModel.value.trim() || "gpt-4o-mini",
     assistant_instruction: els.assistantInstruction.value.trim(),
   };
+}
+
+export function renderLlmModelOptions(state, els, models) {
+  state.availableLlmModels = models;
+  const providerIds = [...new Set(models.map((model) => model.provider_id))];
+  const currentProvider =
+    state.settings?.llm_provider && providerIds.includes(state.settings.llm_provider)
+      ? state.settings.llm_provider
+      : providerIds[0] || "openai";
+
+  els.llmProvider.innerHTML = providerIds
+    .map((providerId) => `<option value="${escapeHtml(providerId)}">${escapeHtml(providerId)}</option>`)
+    .join("");
+  els.llmProvider.value = currentProvider;
+
+  renderLlmModelsForProvider(state, els, currentProvider, state.settings?.llm_model || null);
+}
+
+export function renderLlmModelsForProvider(state, els, providerId, selectedModelId = null) {
+  const providerModels = (state.availableLlmModels || []).filter(
+    (model) => model.provider_id === providerId,
+  );
+
+  els.llmModel.innerHTML = providerModels
+    .map((model) => {
+      const localityLabel = model.locality === "Local" ? "Local" : "Remote";
+      return `<option value="${escapeHtml(model.model_id)}">${escapeHtml(model.model_id)} - ${localityLabel}</option>`;
+    })
+    .join("");
+
+  const modelToSelect =
+    selectedModelId && providerModels.some((model) => model.model_id === selectedModelId)
+      ? selectedModelId
+      : providerModels[0]?.model_id || "";
+  els.llmModel.value = modelToSelect;
 }
 
 export function renderPrimingDocuments(state, els, app) {
@@ -82,4 +119,3 @@ export function renderPrimingDocuments(state, els, app) {
     });
   });
 }
-
