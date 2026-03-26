@@ -69,6 +69,7 @@ dependencies = [
  "dotenvy",
  "ipc_schema",
  "llm_core",
+ "llm_ollama",
  "llm_openai",
  "policy_engine",
  "serde",
@@ -2259,6 +2260,20 @@ dependencies = [
  "anyhow",
  "async-trait",
  "serde",
+ "transcript_core",
+]
+
+[[package]]
+name = "llm_ollama"
+version = "0.2.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "llm_core",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
  "transcript_core",
 ]
 
