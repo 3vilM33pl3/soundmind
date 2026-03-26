@@ -51,6 +51,22 @@ export function setChip(el, label, status) {
   }
 }
 
+export function setStatusBlock(block, valueEl, detailEl, value, detail, status) {
+  if (valueEl) {
+    valueEl.textContent = value;
+  }
+  if (detailEl) {
+    detailEl.textContent = detail;
+  }
+  if (!block) {
+    return;
+  }
+  block.classList.remove("ok", "warn", "error");
+  if (status) {
+    block.classList.add(status);
+  }
+}
+
 export function classifyState(stateValue) {
   if (stateValue === "Capturing" || stateValue === "SttActive" || stateValue === "LlmActive") {
     return "ok";
@@ -65,14 +81,36 @@ export function classifyState(stateValue) {
 }
 
 export function renderDisconnected(els, backendUrl, error) {
-  setChip(els.backendChip, "Backend: disconnected", "error");
-  setChip(els.captureChip, "Capture: unknown", "warn");
-  setChip(els.cloudChip, "Cloud: unknown", "warn");
-  setChip(els.sttChip, "STT: unknown", "warn");
+  setStatusBlock(
+    els.backendBlock,
+    els.backendChip,
+    els.backendDetail,
+    "Backend disconnected",
+    "The desktop app cannot reach the backend service.",
+    "error",
+  );
+  setStatusBlock(
+    els.captureBlock,
+    els.captureChip,
+    els.captureDetail,
+    "Capture unavailable",
+    "Local capture state is unavailable until the backend reconnects.",
+    "warn",
+  );
+  setStatusBlock(
+    els.cloudBlock,
+    els.cloudChip,
+    els.cloudDetail,
+    "Cloud unknown",
+    "Cloud status is unknown because the backend is unreachable.",
+    "warn",
+  );
+  if (els.captureIndicator) {
+    els.captureIndicator.dataset.state = "offline";
+  }
   els.backendNote.textContent = `Cannot reach backend at ${backendUrl}. Start it with: cargo run -p app_backend (${error.message})`;
 }
 
 export function applyTheme(els, theme) {
   applyThemeImpl(els, theme);
 }
-

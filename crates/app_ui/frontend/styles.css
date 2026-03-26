@@ -197,13 +197,13 @@ h4 {
   align-content: start;
 }
 
-.status-grid {
+.status-banner {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.25fr) minmax(0, 1fr);
   gap: 12px;
 }
 
-.status-chip,
+.status-block,
 .privacy-card,
 .detail-row,
 .session-row,
@@ -216,7 +216,7 @@ h4 {
   background: rgba(255, 255, 255, 0.74);
 }
 
-:root[data-theme="dark"] .status-chip,
+:root[data-theme="dark"] .status-block,
 :root[data-theme="dark"] .privacy-card,
 :root[data-theme="dark"] .detail-row,
 :root[data-theme="dark"] .session-row,
@@ -237,25 +237,113 @@ h4 {
   background: rgba(24, 36, 48, 0.82);
 }
 
-.status-chip {
-  padding: 12px 14px;
-  border-radius: 999px;
-  font-size: 0.94rem;
+.status-block {
+  padding: 14px 16px;
+  border-radius: 24px;
+  display: grid;
+  gap: 6px;
+  align-content: start;
 }
 
-.status-chip.ok {
-  color: var(--ok);
+.status-block.capture-primary {
+  background: linear-gradient(180deg, rgba(188, 90, 51, 0.12), rgba(255, 255, 255, 0.82));
+  border-color: rgba(188, 90, 51, 0.24);
+}
+
+:root[data-theme="dark"] .status-block.capture-primary {
+  background: linear-gradient(180deg, rgba(214, 125, 85, 0.16), rgba(24, 36, 48, 0.88));
+  border-color: rgba(214, 125, 85, 0.28);
+}
+
+.status-block.ok {
   border-color: rgba(45, 112, 77, 0.24);
 }
 
-.status-chip.warn {
-  color: var(--warn);
-  border-color: rgba(156, 106, 32, 0.24);
+.status-block.warn {
+  border-color: rgba(156, 106, 32, 0.3);
 }
 
-.status-chip.error {
+.status-block.error {
+  border-color: rgba(142, 43, 35, 0.32);
+}
+
+.status-label {
+  font-size: 0.77rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.status-value {
+  font-size: 1.06rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.capture-primary .status-value {
+  font-size: 1.2rem;
+}
+
+.status-detail {
+  font-size: 0.9rem;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.status-block.ok .status-value {
+  color: var(--ok);
+}
+
+.status-block.warn .status-value {
+  color: var(--warn);
+}
+
+.status-block.error .status-value {
   color: var(--error);
-  border-color: rgba(142, 43, 35, 0.24);
+}
+
+.status-with-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.capture-indicator {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: rgba(16, 32, 43, 0.18);
+  box-shadow: 0 0 0 0 transparent;
+}
+
+.capture-indicator[data-state="active"] {
+  background: var(--error);
+  animation: capture-pulse 1.5s ease-out infinite;
+}
+
+.capture-indicator[data-state="paused"] {
+  background: var(--warn);
+}
+
+.capture-indicator[data-state="error"] {
+  background: var(--error);
+}
+
+.capture-indicator[data-state="offline"],
+.capture-indicator[data-state="idle"] {
+  background: rgba(16, 32, 43, 0.18);
+}
+
+@keyframes capture-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(142, 43, 35, 0.28);
+  }
+  70% {
+    box-shadow: 0 0 0 12px rgba(142, 43, 35, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(142, 43, 35, 0);
+  }
 }
 
 .hero-note,
@@ -1064,7 +1152,7 @@ textarea {
     padding: 16px;
   }
 
-  .status-grid,
+  .status-banner,
   .button-grid,
   .hero-actions,
   .primary-action-controls {

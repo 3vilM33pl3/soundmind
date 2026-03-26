@@ -1,6 +1,6 @@
 // @ts-check
 
-import { classifyState, setChip } from "../lib/ui.js";
+import { setStatusBlock } from "../lib/ui.js";
 import { escapeHtml } from "../lib/utils.js";
 import { renderAssistantCards } from "./assistant.js";
 import { renderSelectionState, renderTranscriptPanel } from "./transcript.js";
@@ -8,14 +8,37 @@ import { renderSelectionState, renderTranscriptPanel } from "./transcript.js";
 export function renderSnapshot(state, els, backendUrl, snapshot, options = {}) {
   state.snapshot = snapshot;
 
-  setChip(els.backendChip, "Backend: connected", "ok");
-  setChip(els.captureChip, `Capture: ${snapshot.capture_state}`, classifyState(snapshot.capture_state));
-  setChip(els.cloudChip, `Cloud: ${snapshot.cloud_state}`, classifyState(snapshot.cloud_state));
-  setChip(
-    els.sttChip,
-    `STT: ${snapshot.stt_provider || "unknown"}`,
-    snapshot.cloud_state === "Error" ? "error" : "ok",
+  const backendStatus = describeBackend(snapshot);
+  const captureStatus = describeCapture(snapshot);
+  const cloudStatus = describeCloud(snapshot);
+
+  setStatusBlock(
+    els.backendBlock,
+    els.backendChip,
+    els.backendDetail,
+    backendStatus.value,
+    backendStatus.detail,
+    backendStatus.status,
   );
+  setStatusBlock(
+    els.captureBlock,
+    els.captureChip,
+    els.captureDetail,
+    captureStatus.value,
+    captureStatus.detail,
+    captureStatus.status,
+  );
+  setStatusBlock(
+    els.cloudBlock,
+    els.cloudChip,
+    els.cloudDetail,
+    cloudStatus.value,
+    cloudStatus.detail,
+    cloudStatus.status,
+  );
+  if (els.captureIndicator) {
+    els.captureIndicator.dataset.state = captureStatus.indicator;
+  }
 
   els.backendNote.textContent =
     snapshot.stt_status || "Backend connected. Waiting for the next state change.";
@@ -46,6 +69,111 @@ export function renderSnapshot(state, els, backendUrl, snapshot, options = {}) {
   renderSelectionState(state, els);
 }
 
+function describeBackend(snapshot) {
+  const provider = snapshot.stt_provider || "STT";
+  if (snapshot.cloud_state === "Error") {
+    return {
+      value: "Backend connected",
+      detail: `${provider} reported an error. Check the recent error list below.`,
+      status: "warn",
+    };
+  }
+
+  return {
+    value: "Backend connected",
+    detail: snapshot.stt_status || `Listening on the local backend and ready to process audio.`,
+    status: "ok",
+  };
+}
+
+function describeCapture(snapshot) {
+  if (snapshot.privacy_pause || snapshot.capture_state === "Paused") {
+    return {
+      value: "Capture paused",
+      detail: "Local system-audio capture is paused before transcript leaves the machine.",
+      status: "warn",
+      indicator: "paused",
+    };
+  }
+
+  if (snapshot.capture_state === "Capturing") {
+    return {
+      value: "Capturing system audio",
+      detail: snapshot.current_monitor_source
+        ? `Listening to ${snapshot.current_monitor_source}.`
+        : "Listening to the current system-audio monitor source.",
+      status: "ok",
+      indicator: "active",
+    };
+  }
+
+  if (snapshot.capture_state === "Error") {
+    return {
+      value: "Capture unavailable",
+      detail: "The capture pipeline reported an error. Review backend status and errors below.",
+      status: "error",
+      indicator: "error",
+    };
+  }
+
+  return {
+    value: "Not capturing",
+    detail: "Soundmind is connected, but local system-audio capture is inactive.",
+    status: null,
+    indicator: "idle",
+  };
+}
+
+function describeCloud(snapshot) {
+  const provider = snapshot.stt_provider || "the STT provider";
+
+  if (snapshot.cloud_state === "Error") {
+    return {
+      value: "Cloud unavailable",
+      detail: snapshot.stt_status || `The connection to ${provider} is in an error state.`,
+      status: "error",
+    };
+  }
+
+  if (snapshot.cloud_pause) {
+    return {
+      value: "Cloud paused",
+      detail: "Cloud processing is paused manually.",
+      status: "warn",
+    };
+  }
+
+  if (snapshot.cloud_auto_pause) {
+    return {
+      value: "Cloud auto-paused",
+      detail: "Speech has been idle long enough that audio upload is temporarily paused.",
+      status: "warn",
+    };
+  }
+
+  if (snapshot.audio_upload_active) {
+    return {
+      value: "Uploading audio",
+      detail: `Detected speech is currently uploading to ${provider}.`,
+      status: "ok",
+    };
+  }
+
+  if (snapshot.capture_state === "Capturing") {
+    return {
+      value: "Connected, waiting for speech",
+      detail: `Local capture is active, but silence is not being uploaded to ${provider}.`,
+      status: null,
+    };
+  }
+
+  return {
+    value: "Cloud idle",
+    detail: `Cloud processing is available, but local capture is not active.`,
+    status: null,
+  };
+}
+
 function renderErrors(els, recentErrors) {
   const filtered = recentErrors.filter((error) => error.trim().length > 0);
   if (!filtered.length) {
@@ -56,4 +184,3 @@ function renderErrors(els, recentErrors) {
       .join("");
   }
 }
-

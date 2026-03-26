@@ -2,10 +2,16 @@
 
 export function createElements() {
   return {
+    backendBlock: document.querySelector("#backend-block"),
     backendChip: document.querySelector("#backend-chip"),
+    backendDetail: document.querySelector("#backend-detail"),
+    captureBlock: document.querySelector("#capture-block"),
     captureChip: document.querySelector("#capture-chip"),
+    captureDetail: document.querySelector("#capture-detail"),
+    captureIndicator: document.querySelector("#capture-indicator"),
+    cloudBlock: document.querySelector("#cloud-block"),
     cloudChip: document.querySelector("#cloud-chip"),
-    sttChip: document.querySelector("#stt-chip"),
+    cloudDetail: document.querySelector("#cloud-detail"),
     backendNote: document.querySelector("#backend-note"),
     transcriptHint: document.querySelector("#transcript-hint"),
     transcriptReturnLive: document.querySelector("#transcript-return-live"),

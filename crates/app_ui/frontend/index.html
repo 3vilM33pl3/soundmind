@@ -30,11 +30,25 @@
                 <span class="theme-toggle-label">Dark</span>
               </label>
             </div>
-            <div class="status-grid">
-              <div class="status-chip" id="backend-chip">Backend: connecting</div>
-              <div class="status-chip" id="capture-chip">Capture: idle</div>
-              <div class="status-chip" id="cloud-chip">Cloud: off</div>
-              <div class="status-chip" id="stt-chip">STT: unknown</div>
+            <div class="status-banner">
+              <article class="status-block" id="backend-block">
+                <div class="status-label">Backend</div>
+                <div class="status-value" id="backend-chip">Connecting to backend</div>
+                <div class="status-detail" id="backend-detail">Waiting for backend status.</div>
+              </article>
+              <article class="status-block capture-primary" id="capture-block">
+                <div class="status-label">Capture</div>
+                <div class="status-value status-with-indicator">
+                  <span class="capture-indicator" id="capture-indicator" aria-hidden="true"></span>
+                  <span id="capture-chip">Not capturing</span>
+                </div>
+                <div class="status-detail" id="capture-detail">Local system-audio capture is inactive.</div>
+              </article>
+              <article class="status-block" id="cloud-block">
+                <div class="status-label">Cloud</div>
+                <div class="status-value" id="cloud-chip">Cloud unknown</div>
+                <div class="status-detail" id="cloud-detail">Waiting for backend status.</div>
+              </article>
             </div>
             <div class="hero-note" id="backend-note">Waiting for backend status.</div>
             <div class="hero-actions">
